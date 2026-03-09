@@ -1,0 +1,50 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebRviz</title>
+  </head>
+  <body>
+    <div id="app">
+      <aside class="panel">
+        <h1>WebRviz</h1>
+
+        <label for="rosbridgeUrl">rosbridge URL</label>
+        <input id="rosbridgeUrl" type="text" />
+
+        <label for="rvizConfigPath">RViz config URL</label>
+        <input id="rvizConfigPath" type="text" />
+
+        <label for="urdfFallbackPath">URDF fallback URL</label>
+        <input id="urdfFallbackPath" type="text" />
+
+        <label for="packageRootUrl">URDF package root URL</label>
+        <input id="packageRootUrl" type="text" />
+
+        <label for="pointCloudTopic">PointCloud2 topic</label>
+        <select id="pointCloudTopic"></select>
+
+        <div class="row">
+          <button id="connectBtn" type="button">Connect</button>
+          <button id="syncBtn" type="button">Sync RViz</button>
+        </div>
+
+        <div class="kv">
+          <span>Fixed Frame</span>
+          <strong id="fixedFrameValue">base_link</strong>
+        </div>
+        <div class="kv">
+          <span>Status</span>
+          <strong id="connectionStatus">disconnected</strong>
+        </div>
+
+        <pre id="logBox"></pre>
+      </aside>
+
+      <main id="viewport"></main>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,235 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com) 
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+<robot name="five_axis">
+    <link name="base_link">
+        <inertial>
+            <origin xyz="2.8868 2.2034 1.2186" rpy="0 0 0" />
+            <mass value="679.98" />
+            <inertia ixx="312.45" ixy="3.6297E-06" ixz="9.0128E-06" iyy="660.11" iyz="-0.00048388" izz="362.08" />
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://five_axis/meshes/base_link.STL" />
+            </geometry>
+            <material name="">
+                <color rgba="0.59216 0.85098 1 1" />
+            </material>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://five_axis/meshes/base_link.STL" />
+            </geometry>
+        </collision>
+    </link>
+    <link name="link_x">
+        <inertial>
+            <origin xyz="1.6715 2.2828 0.0072556" rpy="0 0 0" />
+            <mass value="38.337" />
+            <inertia ixx="54.251" ixy="7.5925E-06" ixz="-0.00014158" iyy="0.29887" iyz="7.5169E-05" izz="54.122" />
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://five_axis/meshes/link_x.STL" />
+            </geometry>
+            <material name="">
+                <color rgba="1 1 1 1" />
+            </material>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://five_axis/meshes/link_x.STL" />
+            </geometry>
+        </collision>
+    </link>
+    <joint name="joint_x" type="prismatic">
+        <origin xyz="-0.175 -0.038992 2.49" rpy="0 0 0" />
+        <parent link="base_link" />
+        <child link="link_x" />
+        <axis xyz="1 0 0" />
+        <limit lower="-1.666" upper="4.434" effort="0" velocity="0" />
+    </joint>
+    <link name="link_y">
+        <inertial>
+            <origin xyz="-0.0057565 2.9676 0.21114" rpy="0 0 0" />
+            <mass value="14.743" />
+            <inertia ixx="0.43968" ixy="0.00013594" ixz="8.0365E-05" iyy="0.26913" iyz="-0.0033496" izz="0.20249" />
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://five_axis/meshes/link_y.STL" />
+            </geometry>
+            <material name="">
+                <color rgba="1 1 1 1" />
+            </material>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://five_axis/meshes/link_y.STL" />
+            </geometry>
+        </collision>
+    </link>
+    <joint name="joint_y" type="prismatic">
+        <origin xyz="1.6658 0.15244 0.00050948" rpy="0 0 0" />
+        <parent link="link_x" />
+        <child link="link_y" />
+        <axis xyz="0 1 0" />
+        <limit lower="-2.939" upper="1.241" effort="0" velocity="0" />
+    </joint>
+    <link name="link_z">
+        <inertial>
+            <origin xyz="0.016617 -0.00061443 -1.2334" rpy="0 0 0" />
+            <mass value="15.368" />
+            <inertia ixx="6.2906" ixy="-2.6268E-07" ixz="6.7231E-05" iyy="6.271" iyz="-6.7007E-06" izz="0.034929" />
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://five_axis/meshes/link_z.STL" />
+            </geometry>
+            <material name="">
+                <color rgba="1 1 1 1" />
+            </material>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://five_axis/meshes/link_z.STL" />
+            </geometry>
+        </collision>
+    </link>
+    <joint name="joint_z" type="prismatic">
+        <origin xyz="-0.1996 2.9387 0.71857" rpy="0 0 0" />
+        <parent link="link_y" />
+        <child link="link_z" />
+        <axis xyz="0 0 -1" />
+        <limit lower="-1.6" upper="0" effort="0" velocity="0" />
+    </joint>
+    <link name="link_c">
+        <inertial>
+            <origin xyz="0.010277 0.0046166 -0.010342" rpy="0 0 0" />
+            <mass value="1.1982" />
+            <inertia ixx="0.0033583" ixy="0.00025058" ixz="-0.00036503" iyy="0.0026486" iyz="-0.00018672" izz="0.004125" />
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://five_axis/meshes/link_c.STL" />
+            </geometry>
+            <material name="">
+                <color rgba="1 1 1 1" />
+            </material>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://five_axis/meshes/link_c.STL" />
+            </geometry>
+        </collision>
+    </link>
+    <joint name="joint_c" type="revolute">
+        <origin xyz="-0.022806 0 -2.6195" rpy="-3.1416 0 0" />
+        <parent link="link_z" />
+        <child link="link_c" />
+        <axis xyz="0 0 -1" />
+        <limit lower="-3.1416" upper="3.1416" effort="0" velocity="0" />
+    </joint>
+    <link name="link_a">
+        <inertial>
+            <origin xyz="-1.1965E-05 0.0017537 0.2405" rpy="0 0 0" />
+            <mass value="0.98175" />
+            <inertia ixx="0.020606" ixy="6.2645E-20" ixz="4.8084E-14" iyy="0.020606" iyz="-3.1013E-08" izz="0.0003068" />
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://five_axis/meshes/link_a.STL" />
+            </geometry>
+            <material name="">
+                <color rgba="0.79216 0.81961 0.93333 1" />
+            </material>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://five_axis/meshes/link_a.STL" />
+            </geometry>
+        </collision>
+    </link>
+    <joint name="joint_a" type="revolute">
+        <origin xyz="0.0405 1.2088E-05 0.081753" rpy="-1.5708 0 1.5708" />
+        <parent link="link_c" />
+        <child link="link_a" />
+        <axis xyz="1 0 0" />
+        <limit lower="-0.398" upper="1.309" effort="0" velocity="0" />
+    </joint>
+    <link name="link_tcp" />
+    <joint name="joint_tcp" type="fixed">
+        <parent link="link_a" />
+        <child link="link_tcp" />
+        <origin xyz="0.0 0.0 0.5" rpy="0.0 0.0 0.0" />
+    </joint>
+    <transmission name="trans_joint_x">
+        <type>transmission_interface/SimpleTransmission</type>
+        <joint name="joint_x">
+            <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+        </joint>
+        <actuator name="joint_x_motor">
+            <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+            <mechanicalReduction>1</mechanicalReduction>
+        </actuator>
+    </transmission>
+    <transmission name="trans_joint_y">
+        <type>transmission_interface/SimpleTransmission</type>
+        <joint name="joint_y">
+            <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+        </joint>
+        <actuator name="joint_y_motor">
+            <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+            <mechanicalReduction>1</mechanicalReduction>
+        </actuator>
+    </transmission>
+    <transmission name="trans_joint_z">
+        <type>transmission_interface/SimpleTransmission</type>
+        <joint name="joint_z">
+            <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+        </joint>
+        <actuator name="joint_z_motor">
+            <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+            <mechanicalReduction>1</mechanicalReduction>
+        </actuator>
+    </transmission>
+    <transmission name="trans_joint_c">
+        <type>transmission_interface/SimpleTransmission</type>
+        <joint name="joint_c">
+            <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+        </joint>
+        <actuator name="joint_c_motor">
+            <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+            <mechanicalReduction>1</mechanicalReduction>
+        </actuator>
+    </transmission>
+    <transmission name="trans_joint_a">
+        <type>transmission_interface/SimpleTransmission</type>
+        <joint name="joint_a">
+            <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+        </joint>
+        <actuator name="joint_a_motor">
+            <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+            <mechanicalReduction>1</mechanicalReduction>
+        </actuator>
+    </transmission>
+    <gazebo>
+        <plugin name="gazebo_ros_control" filename="libgazebo_ros_control.so">
+            <robotNamespace>/</robotNamespace>
+        </plugin>
+    </gazebo>
+</robot>
+
