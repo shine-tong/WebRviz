@@ -7,20 +7,22 @@ on:
       - 'README.md'
       - 'package.json'
       - 'package-lock.json'
+      - '.github/workflows/ci.yml'
   pull_request:
     paths:
       - 'web_rviz/**'
       - 'README.md'
       - 'package.json'
       - 'package-lock.json'
+      - '.github/workflows/ci.yml'
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        node: [18, 20]
+        node: [node18, node20]
     defaults:
       run:
         working-directory: web_rviz
