@@ -1085,6 +1085,7 @@ elements.cartesianFrame.addEventListener("change", () => {
     return;
   }
   cartesianFrame = elements.cartesianFrame.value;
+  log(`cartesian frame changed: ${cartesianFrame || "(none)"}`);
   scheduleRightPanelUpdate();
 });
 
@@ -1096,6 +1097,7 @@ elements.trajRecordBtn.addEventListener("click", () => {
     recordLastMotionTime = 0;
     recordLastPositions = null;
     updateTrajectoryUi();
+    log(`trajectory record stopped (${trajectory.length} frame${trajectory.length === 1 ? "" : "s"})`);
     return;
   }
 
@@ -1107,6 +1109,7 @@ elements.trajRecordBtn.addEventListener("click", () => {
   trajectory = [];
   playbackIndex = 0;
   recordStartTime = 0;
+  log("trajectory record armed");
   lastRecordTime = 0;
   if (jointState.length > 0) {
     recordArmBaseline = new Map<string, number>();
@@ -1123,14 +1126,17 @@ elements.trajPlayBtn.addEventListener("click", () => {
     return;
   }
   startPlayback();
+  log("trajectory play");
 });
 
 elements.trajPauseBtn.addEventListener("click", () => {
   pausePlayback();
+  log("trajectory paused");
 });
 
 elements.trajClearBtn.addEventListener("click", () => {
   clearTrajectory();
+  log("trajectory cleared");
 });
 
 elements.trajProgress.addEventListener("input", () => {
@@ -1146,10 +1152,12 @@ elements.trajProgress.addEventListener("input", () => {
   let index = 0;
   while (index < trajectory.length - 1 && trajectory[index].t < targetTime) {
     index += 1;
+  log(`trajectory scrubbed: ${Math.round(percent * 100)}%`);
   }
 
   pausePlayback();
   setPlaybackIndex(index);
+  log(`trajectory scrubbed: ${Math.round(percent * 100)}%`);
 });
 
 elements.pointCloudTopic.addEventListener("change", async () => {
@@ -1175,6 +1183,9 @@ window.addEventListener("beforeunload", () => {
 });
 
 log("WebRviz ready. Click Connect to start.");
+
+
+
 
 
 
