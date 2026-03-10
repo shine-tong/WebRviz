@@ -1,4 +1,4 @@
-﻿import {
+import {
   AmbientLight,
   AxesHelper,
   BufferAttribute,
@@ -31,6 +31,13 @@ interface ParsedPointCloud {
   count: number;
 }
 
+export interface TfNode {
+  frame: string;
+  parent: string;
+  translation: Vector3;
+  rotation: Quaternion;
+}
+
 export class SceneManager {
   private readonly container: HTMLElement;
   private readonly scene: Scene;
@@ -42,7 +49,9 @@ export class SceneManager {
   private readonly worldGrid: GridHelper;
   private readonly tfRecords = new Map<string, TfRecord>();
   private readonly tfAxes = new Map<string, AxesHelper>();
-
+  private endEffectorAxis: AxesHelper | null = null;
+  private endEffectorFrame = "";
+  private showOnlyEndEffector = false;
   private pointCloud: Points | null = null;
   private pointCloudFrameId = "";
   private pointCloudMaterial: PointsMaterial;
@@ -119,6 +128,180 @@ export class SceneManager {
     return this.fixedFrame;
   }
 
+  getRobotBaseFrame(): string {
+    return this.robotBaseFrame;
+  }
+
+  setEndEffectorFrame(frame: string): void {
+    this.endEffectorFrame = frame || "";
+    this.attachEndEffectorAxis();
+    this.refreshFrameTransforms();
+  }
+
+  setShowOnlyEndEffector(show: boolean): void {
+    this.showOnlyEndEffector = show;
+    if (!show && this.endEffectorAxis) {
+      this.endEffectorAxis.visible = false;
+    }
+    this.attachEndEffectorAxis();
+    this.refreshFrameTransforms();
+  }
+
+  getDefaultEndEffectorFrame(): string {
+    if (!this.robot) {
+      return this.robotBaseFrame;
+    }
+
+    const linkMap = this.robot.links;
+    if (linkMap) {
+      const linkKeys = Object.keys(linkMap);
+      if (linkKeys.length > 0) {
+        return linkKeys[linkKeys.length - 1];
+      }
+    }
+
+    const frameMap = this.robot.frames;
+    if (frameMap) {
+      const frameKeys = Object.keys(frameMap);
+      if (frameKeys.length > 0) {
+        return frameKeys[frameKeys.length - 1];
+      }
+    }
+
+    return this.robotBaseFrame;
+  }
+
+  getLinkList(): string[] {
+    if (this.robot && this.robot.links) {
+      return Object.keys(this.robot.links).sort((left, right) => left.localeCompare(right));
+    }
+    return [];
+  }
+
+  getFrameList(): string[] {
+    const frames = new Set<string>();
+    if (this.fixedFrame) {
+      frames.add(this.fixedFrame);
+    }
+    if (this.robotBaseFrame) {
+      frames.add(this.robotBaseFrame);
+    }
+    for (const [child, record] of this.tfRecords.entries()) {
+      frames.add(child);
+      if (record.parent) {
+        frames.add(record.parent);
+      }
+    }
+    if (this.robot) {
+      const frameMap = this.robot.frames || this.robot.links;
+      if (frameMap) {
+        for (const frame of Object.keys(frameMap)) {
+          frames.add(frame);
+        }
+      }
+    }
+    return Array.from(frames).filter(Boolean).sort((left, right) => left.localeCompare(right));
+  }
+
+  getTfSnapshot(): Array<{ parent: string; child: string }> {
+    const snapshot: Array<{ parent: string; child: string }> = [];
+    for (const [child, record] of this.tfRecords.entries()) {
+      snapshot.push({ parent: record.parent, child });
+    }
+    return snapshot;
+  }
+
+  clearTfRecords(): void {
+    this.tfRecords.clear();
+    for (const axis of this.tfAxes.values()) {
+      axis.visible = false;
+    }
+    this.refreshFrameTransforms();
+  }
+
+  private ensureEndEffectorAxis(): AxesHelper {
+    if (!this.endEffectorAxis) {
+      this.endEffectorAxis = new AxesHelper(0.12);
+      this.endEffectorAxis.visible = false;
+      this.tfLayer.add(this.endEffectorAxis);
+    }
+    return this.endEffectorAxis;
+  }
+
+  private attachEndEffectorAxis(): void {
+    if (!this.endEffectorFrame) {
+      return;
+    }
+
+    const axis = this.ensureEndEffectorAxis();
+    const frameObject = this.getRobotFrameObject(this.endEffectorFrame);
+    if (frameObject) {
+      if (axis.parent !== frameObject) {
+        if (axis.parent) {
+          axis.parent.remove(axis);
+        }
+        frameObject.add(axis);
+      }
+      axis.visible = this.showOnlyEndEffector;
+      return;
+    }
+
+    if (axis.parent !== this.tfLayer) {
+      if (axis.parent) {
+        axis.parent.remove(axis);
+      }
+      this.tfLayer.add(axis);
+    }
+    axis.visible = this.showOnlyEndEffector;
+  }
+  private getRobotFrameObject(frame: string): any | null {
+    if (!this.robot || !frame) {
+      return null;
+    }
+
+    if (typeof this.robot.getFrame === "function") {
+      try {
+        const found = this.robot.getFrame(frame);
+        if (found) {
+          return found;
+        }
+      } catch {
+        // ignore lookup errors
+      }
+    }
+
+    const frameMap = this.robot.frames || this.robot.links;
+    if (frameMap && frameMap[frame]) {
+      return frameMap[frame];
+    }
+
+    return null;
+  }
+  getRelativeTransform(frame: string): { translation: Vector3; rotation: Quaternion } | null {
+    const cache = new Map<string, Matrix4 | null>();
+    const relative = this.computeRelativeMatrix(frame, cache);
+    if (relative) {
+      const position = new Vector3();
+      const rotation = new Quaternion();
+      const scale = new Vector3();
+      relative.decompose(position, rotation, scale);
+      return { translation: position, rotation };
+    }
+
+    const frameObject = this.getRobotFrameObject(frame);
+    if (!frameObject || !this.robot) {
+      return null;
+    }
+
+    this.robot.updateMatrixWorld(true);
+
+    const position = new Vector3();
+    const rotation = new Quaternion();
+    frameObject.getWorldPosition(position);
+    frameObject.getWorldQuaternion(rotation);
+    return { translation: position, rotation };
+  }
+
   setRobot(robot: any, baseFrame = "base_link"): void {
     if (this.robot) {
       this.robotLayer.remove(this.robot);
@@ -127,11 +310,7 @@ export class SceneManager {
     this.robot = robot;
     this.robotBaseFrame = baseFrame || "base_link";
 
-    if (this.robot) {
-      this.robotLayer.add(this.robot);
-    }
-
-    this.refreshFrameTransforms();
+    if (this.robot) {      this.robotLayer.add(this.robot);    }    this.attachEndEffectorAxis();    this.refreshFrameTransforms();
   }
 
   updateJointStates(message: unknown): void {
@@ -204,6 +383,20 @@ export class SceneManager {
     this.refreshFrameTransforms();
   }
 
+  getTfNodes(): TfNode[] {
+    const nodes: TfNode[] = [];
+    for (const [frame, record] of this.tfRecords.entries()) {
+      nodes.push({
+        frame,
+        parent: record.parent,
+        translation: record.translation.clone(),
+        rotation: record.rotation.clone()
+      });
+    }
+    nodes.sort((a, b) => a.frame.localeCompare(b.frame));
+    return nodes;
+  }
+
   setPointCloud(pointCloud: ParsedPointCloud | null): void {
     if (!pointCloud) {
       if (this.pointCloud) {
@@ -249,10 +442,23 @@ export class SceneManager {
     const cache = new Map<string, Matrix4 | null>();
 
     for (const [frame, axis] of this.tfAxes.entries()) {
+      if (this.showOnlyEndEffector) {
+        axis.visible = false;
+        continue;
+      }
+
       const relative = this.computeRelativeMatrix(frame, cache);
       axis.visible = relative !== null;
       if (relative) {
         this.applyMatrixToObject(axis, relative);
+      }
+    }
+
+    if (this.endEffectorAxis && this.showOnlyEndEffector && this.endEffectorAxis.parent === this.tfLayer) {
+      const relative = this.computeRelativeMatrix(this.endEffectorFrame, cache);
+      this.endEffectorAxis.visible = relative !== null;
+      if (relative) {
+        this.applyMatrixToObject(this.endEffectorAxis, relative);
       }
     }
 
@@ -273,7 +479,6 @@ export class SceneManager {
       }
     }
   }
-
   private computeRelativeMatrix(frame: string, cache: Map<string, Matrix4 | null>): Matrix4 | null {
     const fixedMatrix = this.computeAbsoluteMatrix(this.fixedFrame, cache, new Set());
     const frameMatrix = this.computeAbsoluteMatrix(frame, cache, new Set());
@@ -355,6 +560,14 @@ export class SceneManager {
     window.requestAnimationFrame(this.loop);
   }
 }
+
+
+
+
+
+
+
+
 
 
 

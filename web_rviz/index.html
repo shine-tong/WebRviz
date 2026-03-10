@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -7,7 +7,7 @@
   </head>
   <body>
     <div id="app">
-      <aside class="panel">
+      <aside class="panel panel-left">
         <h1>WebRviz</h1>
 
         <label for="rosbridgeUrl">rosbridge URL</label>
@@ -44,7 +44,46 @@
 
       <main id="viewport">
         <button id="sidebarToggleBtn" type="button" aria-label="Toggle sidebar">Hide Sidebar</button>
+        <button id="rightSidebarToggleBtn" type="button" aria-label="Toggle right sidebar">&lt;</button>
       </main>
+
+      <aside class="panel panel-right" id="rightSidebar">
+        <h2>Robot State</h2>
+
+        <section class="panel-section">
+          <h3>Joint Angles</h3>
+          <div id="jointValues" class="data-list"></div>
+        </section>
+
+        <section class="panel-section">
+          <h3>Cartesian</h3>
+          <label for="cartesianFrame">Frame</label>
+          <select id="cartesianFrame"></select>
+          <div id="cartesianValues" class="data-list"></div>
+        </section>
+
+        <section class="panel-section">
+          <h3>Trajectory</h3>
+          <div class="row row-compact">
+            <button id="trajRecordBtn" type="button">Record</button>
+            <button id="trajPlayBtn" type="button">Play</button>
+          </div>
+          <div class="row row-compact">
+            <button id="trajPauseBtn" type="button">Pause</button>
+            <button id="trajClearBtn" type="button">Clear</button>
+          </div>
+          <input id="trajProgress" type="range" min="0" max="100" value="0" />
+          <div class="kv small">
+            <span id="trajInfo">0 frames</span>
+            <strong id="trajTime">0.0s</strong>
+          </div>
+        </section>
+
+        <section class="panel-section">
+          <h3>TF Tree</h3>
+          <pre id="tfTree"></pre>
+        </section>
+      </aside>
     </div>
 
     <script type="module" src="/src/main.ts"></script>
