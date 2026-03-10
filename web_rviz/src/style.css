@@ -141,7 +141,9 @@ button:disabled {
 
 #logBox {
   margin: 4px 0 0;
-  flex: 1;
+  flex: 0 0 270px;
+  height: 270px;
+  max-height: 270px;
   overflow: auto;
   border-radius: 8px;
   border: 1px solid #303846;
@@ -262,3 +264,4 @@ button:disabled {
     grid-template-rows: 1fr;
   }
 }
+
