@@ -1,4 +1,7 @@
 ﻿# WebRviz 本地可视化工具
+[![CI](https://img.shields.io/badge/CI-GitHub_Actions-blue)](.github/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
 
 ## 项目简介
 
@@ -313,3 +316,4 @@ rosparam get /robot_description | head
 
 - 页面日志框
 - 浏览器开发者工具 Console
+
