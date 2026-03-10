@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   color-scheme: dark;
   font-family: "Segoe UI", "PingFang SC", sans-serif;
   --panel-bg: #181b20;
@@ -27,6 +27,14 @@ body {
   height: 100%;
   display: grid;
   grid-template-columns: 320px 1fr;
+}
+
+#app.sidebar-collapsed {
+  grid-template-columns: 1fr;
+}
+
+#app.sidebar-collapsed .panel {
+  display: none;
 }
 
 .panel {
@@ -112,6 +120,17 @@ button:hover {
   height: 100%;
 }
 
+#sidebarToggleBtn {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  width: auto;
+  z-index: 10;
+  border: 1px solid #3f4f63;
+  background: rgba(20, 31, 45, 0.85);
+  backdrop-filter: blur(3px);
+}
+
 @media (max-width: 1024px) {
   #app {
     grid-template-columns: 1fr;
@@ -121,5 +140,10 @@ button:hover {
   .panel {
     border-right: none;
     border-bottom: 1px solid var(--panel-border);
+  }
+
+  #app.sidebar-collapsed {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr;
   }
 }

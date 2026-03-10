@@ -112,6 +112,24 @@ source ~/your_ws/devel/setup.bash
 roslaunch rosbridge_server rosbridge_websocket.launch
 ```
 
+或者直接在`demo.launch`中启动`rosbrige node`和`rosapi node`
+```xml
+  <!-- Start rosbridge websocket server -->
+  <node pkg="rosbridge_server"
+        type="rosbridge_websocket"
+        name="rosbridge_websocket"
+        output="screen">
+    <param name="port" value="9090"/>
+  </node>
+  
+  <!-- rosapi -->
+  <node pkg="rosapi"
+        type="rosapi_node"
+        name="rosapi"
+        output="screen"/>
+```
+>注：建议将上面两个节点放在启动 Rviz 节点的后面
+
 ### 3. 构建前端资源
 
 ```bash

@@ -7,6 +7,7 @@ import { loadRobotModel } from "./visualization/robotLoader";
 import { SceneManager } from "./visualization/sceneManager";
 
 interface AppElements {
+  appRoot: HTMLElement;
   rosbridgeUrl: HTMLInputElement;
   rvizConfigPath: HTMLInputElement;
   urdfFallbackPath: HTMLInputElement;
@@ -14,6 +15,7 @@ interface AppElements {
   pointCloudTopic: HTMLSelectElement;
   connectBtn: HTMLButtonElement;
   syncBtn: HTMLButtonElement;
+  sidebarToggleBtn: HTMLButtonElement;
   fixedFrameValue: HTMLElement;
   connectionStatus: HTMLElement;
   logBox: HTMLElement;
@@ -28,6 +30,7 @@ interface TopicSubscriptions {
 }
 
 const POINTCLOUD2_TYPE = "sensor_msgs/PointCloud2";
+const SIDEBAR_STATE_KEY = "webrviz-sidebar-collapsed";
 
 function getElements(): AppElements {
   const byId = <T extends HTMLElement>(id: string): T => {
@@ -39,6 +42,7 @@ function getElements(): AppElements {
   };
 
   return {
+    appRoot: byId<HTMLElement>("app"),
     rosbridgeUrl: byId<HTMLInputElement>("rosbridgeUrl"),
     rvizConfigPath: byId<HTMLInputElement>("rvizConfigPath"),
     urdfFallbackPath: byId<HTMLInputElement>("urdfFallbackPath"),
@@ -46,6 +50,7 @@ function getElements(): AppElements {
     pointCloudTopic: byId<HTMLSelectElement>("pointCloudTopic"),
     connectBtn: byId<HTMLButtonElement>("connectBtn"),
     syncBtn: byId<HTMLButtonElement>("syncBtn"),
+    sidebarToggleBtn: byId<HTMLButtonElement>("sidebarToggleBtn"),
     fixedFrameValue: byId<HTMLElement>("fixedFrameValue"),
     connectionStatus: byId<HTMLElement>("connectionStatus"),
     logBox: byId<HTMLElement>("logBox"),
@@ -63,6 +68,7 @@ sceneManager.setFixedFrame(config.fixedFrame);
 let topics: TopicInfo[] = [];
 let subscriptions: TopicSubscriptions = {};
 let lastPointCloudTimestamp = 0;
+let sidebarCollapsed = window.localStorage.getItem(SIDEBAR_STATE_KEY) === "1";
 
 function formatError(error: unknown): string {
   if (error instanceof Error) {
@@ -82,6 +88,18 @@ function log(message: string): void {
 
 function updateStatusLabel(state: string, detail?: string): void {
   elements.connectionStatus.textContent = detail ? `${state} (${detail})` : state;
+}
+
+function setSidebarCollapsed(collapsed: boolean): void {
+  sidebarCollapsed = collapsed;
+  elements.appRoot.classList.toggle("sidebar-collapsed", sidebarCollapsed);
+  elements.sidebarToggleBtn.textContent = sidebarCollapsed ? "Show Sidebar" : "Hide Sidebar";
+  window.localStorage.setItem(SIDEBAR_STATE_KEY, sidebarCollapsed ? "1" : "0");
+
+  // Trigger canvas resize after layout change.
+  window.requestAnimationFrame(() => {
+    window.dispatchEvent(new Event("resize"));
+  });
 }
 
 function renderConfigToUi(): void {
@@ -305,6 +323,7 @@ async function syncFromRviz(): Promise<void> {
 renderConfigToUi();
 updatePointCloudOptions([], config.defaultPointCloudTopic);
 updateStatusLabel("disconnected");
+setSidebarCollapsed(sidebarCollapsed);
 
 rosClient.onStateChange((state, detail) => {
   updateStatusLabel(state, detail);
@@ -333,6 +352,10 @@ elements.syncBtn.addEventListener("click", async () => {
   } catch (error) {
     log(`sync failed: ${formatError(error)}`);
   }
+});
+
+elements.sidebarToggleBtn.addEventListener("click", () => {
+  setSidebarCollapsed(!sidebarCollapsed);
 });
 
 elements.pointCloudTopic.addEventListener("change", async () => {
