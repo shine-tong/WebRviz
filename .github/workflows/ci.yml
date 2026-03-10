@@ -1,0 +1,42 @@
+﻿name: CI
+
+on:
+  push:
+    paths:
+      - 'web_rviz/**'
+      - 'README.md'
+      - 'package.json'
+      - 'package-lock.json'
+  pull_request:
+    paths:
+      - 'web_rviz/**'
+      - 'README.md'
+      - 'package.json'
+      - 'package-lock.json'
+
+jobs:
+  build:
+    runs-on: ubuntu-20.04
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [18, 20]
+    defaults:
+      run:
+        working-directory: web_rviz
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: web_rviz/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
