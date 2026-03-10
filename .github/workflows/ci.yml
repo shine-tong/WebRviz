@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: [node18, node20]
+        node: [18, 20]
     defaults:
       run:
         working-directory: web_rviz
