@@ -4,27 +4,19 @@
 
 `WebRviz` 是一个运行在本地浏览器中的轻量级可视化工具，目标是将网页端显示与 `RViz` 的核心数据保持同步，并支持后续嵌入 Qt 界面。
 
-实现功能：
-
-- 在网页中显示机器人 URDF 模型。
-- 同步 `TF`、`joint_states`、`PointCloud2`。
-- 支持“一键同步 RViz”数据配置。
-- 保持本地部署和低资源占用。
-
 ---
 
-## 功能清单
+## 功能特性
 
-- 支持通过 `/robot_description` 加载 URDF。
-- 支持 URDF 地址（`URDF fallback URL`）。
-- 支持 `package://` mesh 路径加载（通过本地 HTTP 挂载 ROS 包目录）。
-- 同步订阅：
-  - `/tf`
-  - `/tf_static`
-  - `/joint_states`
-  - `sensor_msgs/PointCloud2`（自动发现 + 手动切换）
-- 支持固定坐标系（`Fixed Frame`）显示。
-- 支持 `Sync RViz` 按钮：从 RViz 配置提取关键信息并重建订阅。
+- 在网页中显示机器人 URDF 模型。
+- 同步订阅：`/tf`、`/tf_static`、`/joint_states`、`sensor_msgs/PointCloud2`。
+- 一键同步 RViz 配置（固定坐标系与点云候选话题）。
+- 右侧信息栏：关节角度、笛卡尔坐标、TF 树。
+- 轨迹录制与回放：支持暂停、拖动进度、自动重播、末端坐标系跟随显示。
+- 操作日志：左下角日志框记录关键操作。
+- 本地部署，低资源占用。
+
+![WebRviz](web_rviz/assets/webrviz.png)
 
 ---
 
@@ -38,8 +30,8 @@
 
 ### 工具链
 
-- Python 3.8 及以上
-- Node.js 18 及以上（建议 Node.js 20 LTS）
+- Python 3.8+
+- Node.js 18+（推荐 Node.js 20 LTS）
 - npm
 
 ### ROS 组件
@@ -105,30 +97,32 @@ source ~/your_ws/devel/setup.bash
 roslaunch your_moveit_config demo.launch
 ```
 
-另开一个终端启动 rosbridge：
+另开终端启动 rosbridge：
 
 ```bash
 source ~/your_ws/devel/setup.bash
 roslaunch rosbridge_server rosbridge_websocket.launch
 ```
 
-或者直接在`demo.launch`中启动`rosbrige node`和`rosapi node`
+也可以直接在 `demo.launch` 中加入 `rosbridge` 与 `rosapi`：
+
 ```xml
-  <!-- Start rosbridge websocket server -->
-  <node pkg="rosbridge_server"
-        type="rosbridge_websocket"
-        name="rosbridge_websocket"
-        output="screen">
-    <param name="port" value="9090"/>
-  </node>
-  
-  <!-- rosapi -->
-  <node pkg="rosapi"
-        type="rosapi_node"
-        name="rosapi"
-        output="screen"/>
+<!-- Start rosbridge websocket server -->
+<node pkg="rosbridge_server"
+      type="rosbridge_websocket"
+      name="rosbridge_websocket"
+      output="screen">
+  <param name="port" value="9090"/>
+</node>
+
+<!-- rosapi -->
+<node pkg="rosapi"
+      type="rosapi_node"
+      name="rosapi"
+      output="screen"/>
 ```
->注：建议将上面两个节点放在启动 Rviz 节点的后面
+
+> 注：建议将上述两个节点放在 RViz 节点之后启动。
 
 ### 3. 构建前端资源
 
@@ -137,7 +131,7 @@ cd ~/webrviz/web_rviz
 npm run build
 ```
 
-### 4. 启动推荐静态服务（支持 package://）
+### 4. 启动静态服务（支持 package://）
 
 ```bash
 python3 tools/serve_webrviz.py \
@@ -149,10 +143,20 @@ python3 tools/serve_webrviz.py \
 
 ### 5. 打开网页
 
-浏览器访问：
-
 ```text
 http://127.0.0.1:8080
+```
+
+---
+
+## 开发与预览
+
+```bash
+# 开发模式
+npm run dev
+
+# 预览构建结果
+npm run preview
 ```
 
 ---
@@ -175,6 +179,31 @@ webrviz-runtime-config
 
 ---
 
+## 右侧信息栏说明
+
+- 默认隐藏，可通过中间箭头展开或收起。
+- 关节角度：显示当前 `/joint_states`。
+- 笛卡尔坐标：下拉框仅保留 `link` 信息，默认选择 TF 树中的最后一个 link 作为 TCP link。
+- TF 树：展示当前 TF 结构，标注选中帧与固定帧。
+
+---
+
+## 轨迹录制与回放
+
+- `Record`：进入等待运动状态，检测到机械臂运动后开始实际录制。
+- 自动停止：机械臂持续静止一段时间后自动结束录制。
+- `Play`：播放当前轨迹，若已播放到末尾会自动从头开始。
+- `Pause`：暂停在当前帧，可继续播放。
+- 进度条：拖动会暂停并跳到对应帧。
+
+---
+
+## 日志输出
+
+- 左下角日志框记录关键操作（连接、同步、录制、回放、帧选择等）。
+
+---
+
 ## package:// 资源映射说明
 
 ### 背景
@@ -185,7 +214,7 @@ URDF 中常见 mesh 引用：
 <mesh filename="package://urdf_package_name/meshes/base_link.STL"/>
 ```
 
-浏览器无法直接读取本地文件系统路径（例如 `/home/...`），因此必须先映射为 HTTP URL。
+浏览器无法直接读取本地文件系统路径（例如 `/home/...`），因此必须映射为 HTTP URL。
 
 ### 本项目做法
 
@@ -198,9 +227,9 @@ URDF 中常见 mesh 引用：
 将本地目录映射为：
 
 - URL：`/ros_pkgs/urdf_package_name/...`
-- 本地：`~/urdf_ws/src/urdf_package_name/...`
+- 本地：`~/your_ws/src/urdf_package_name/...`
 
-因此页面中应设置：
+页面中设置：
 
 ```text
 URDF package root URL = /ros_pkgs
@@ -218,7 +247,7 @@ URDF package root URL = /ros_pkgs
 4. 选择可用点云话题并重建订阅。
 5. 刷新网页端渲染状态。
 
->注：只同步数据，不会复制 RViz 的面板布局。
+> 注：只同步数据，不会复制 RViz 的面板布局。
 
 ---
 
@@ -244,7 +273,7 @@ http://127.0.0.1:8080
 
 ### 1) 启动前端时报 `Unexpected token`
 
-原因通常是 Node 版本过低。请升级到 Node 18+。
+通常是 Node 版本过低。请升级到 Node 18+。
 
 ### 2) rosbridge 报 `/rosapi/topics_and_types does not exist`
 
@@ -252,7 +281,7 @@ http://127.0.0.1:8080
 
 ### 3) 模型不显示且出现 `*.STL 404`
 
-通常是 `package://` 资源未挂载。请检查：
+通常是 `package://` 资源未挂载：
 
 - 是否使用 `tools/serve_webrviz.py` 启动。
 - 是否配置 `--mount urdf_package_name=...`。
@@ -267,7 +296,7 @@ http://127.0.0.1:8080
 
 ### 5) Python 报 `type object is not subscriptable`
 
-这是 Python 版本语法兼容问题（3.8 常见）。当前脚本已兼容 Python 3.8。
+这是 Python 版本语法兼容问题（3.8 常见），脚本已兼容 Python 3.8。
 
 ---
 
@@ -282,5 +311,5 @@ rosparam get /robot_description | head
 
 网页侧建议同时查看：
 
-- 页面日志框（左侧）
+- 页面日志框
 - 浏览器开发者工具 Console
