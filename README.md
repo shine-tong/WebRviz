@@ -56,44 +56,19 @@ rosservice list | grep /rosapi
 
 ---
 
-## 目录结构
+## 快速开始
 
-```text
-web_rviz/
-├─ src/
-│  ├─ ros/
-│  │  ├─ rosClient.ts
-│  │  └─ pointcloud.ts
-│  ├─ rviz/
-│  │  └─ rvizConfig.ts
-│  ├─ visualization/
-│  │  ├─ sceneManager.ts
-│  │  └─ robotLoader.ts
-│  ├─ config.ts
-│  ├─ main.ts
-│  └─ style.css
-├─ public/
-│  ├─ rviz/moveit.rviz
-│  └─ urdf/five_axis.urdf
-├─ tools/
-│  └─ serve_webrviz.py
-├─ index.html
-├─ package.json
-└─ README.md
-```
+### 1. 从源码构建
 
----
-
-## 快速启动
-
-### 1. 安装前端依赖
+#### 1.1 从仓库拉取代码并安装前端依赖
 
 ```bash
-cd ~/webrviz/web_rviz
+git clone https://github.com/shine-tong/WebRviz.git
+cd ~/WebRviz/web_rviz
 npm install
 ```
 
-### 2. 启动 ROS 与 MoveIt
+#### 1.2 启动 ROS 与 MoveIt
 
 ```bash
 source ~/your_ws/devel/setup.bash
@@ -127,14 +102,14 @@ roslaunch rosbridge_server rosbridge_websocket.launch
 
 > 注：建议将上述两个节点放在 RViz 节点之后启动。
 
-### 3. 构建前端资源
+#### 1.3 构建前端资源
 
 ```bash
-cd ~/webrviz/web_rviz
+cd ~/WebRviz/web_rviz
 npm run build
 ```
 
-### 4. 启动静态服务（支持 package://）
+#### 1.4 启动静态服务（支持 package://）
 
 ```bash
 python3 tools/serve_webrviz.py \
@@ -144,11 +119,43 @@ python3 tools/serve_webrviz.py \
   --port 8080
 ```
 
-### 5. 打开网页
+#### 1.5 打开网页
 
 ```text
 http://127.0.0.1:8080
 ```
+
+### 2. 使用发行版
+
+#### 2.1 解压下载的 tar 包
+
+```bash
+tar -xzf webrviz-<version>.tar.gz
+cd webrviz
+```
+
+#### 2.2 启动静态服务
+
+```bash
+./start.sh
+```
+
+默认端口为 `8080`，也可以通过环境变量配置：
+
+```bash
+export WEBRVIZ_HOST=0.0.0.0 \
+WEBRVIZ_PORT=8080 \
+WEBRVIZ_MOUNTS="--mount urdf_package_name=~/your_ws/src/urdf_package_name"
+```
+
+> 注：`WEBRVIZ_MOUNTS` 参数会直接传给 `tools/serve_webrviz.py`，用于挂载 `package://` 资源。
+
+#### 2.3 打开网页
+
+```text
+http://127.0.0.1:8080
+```
+
 
 ---
 
@@ -299,21 +306,4 @@ http://127.0.0.1:8080
 
 ### 5) Python 报 `type object is not subscriptable`
 
-这是 Python 版本语法兼容问题（3.8 常见），脚本已兼容 Python 3.8。
-
----
-
-## 开发调试命令参考
-
-```bash
-rosnode list
-rostopic list
-rostopic hz /joint_states
-rosparam get /robot_description | head
-```
-
-网页侧建议同时查看：
-
-- 页面日志框
-- 浏览器开发者工具 Console
-
+Python 版本语法兼容问题（3.8 常见），脚本已兼容 Python 3.8。
