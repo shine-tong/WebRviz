@@ -1,0 +1,43 @@
+name: Release (latest)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+          cache-dependency-path: web_rviz/package-lock.json
+
+      - name: Package tar.gz
+        run: bash scripts/package_tar.sh
+
+      - name: Update latest tag
+        run: |
+          git tag -f latest
+          git push -f origin refs/tags/latest
+
+      - name: Publish latest release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: latest
+          name: latest
+          artifacts: dist-packages/webrviz-*.tar.gz
+          allowUpdates: true
+          replacesArtifacts: true
+          omitBody: true
