@@ -1,9 +1,12 @@
-name: Release (latest)
+﻿name: Release (latest)
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - master
+    paths:
+      - 'web_rviz/package.json'
+      - '.github/workflows/release.yml'
 
 permissions:
   contents: write
@@ -17,7 +20,34 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Detect version change
+        id: version
+        shell: bash
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${BEFORE_SHA}" ]] && git rev-parse --verify "${BEFORE_SHA}" >/dev/null 2>&1; then
+            PREV_VERSION="$(git show "${BEFORE_SHA}:web_rviz/package.json" | node -pe "JSON.parse(require('fs').readFileSync(0,'utf8')).version")"
+          else
+            PREV_VERSION=""
+          fi
+
+          CURR_VERSION="$(git show "${AFTER_SHA}:web_rviz/package.json" | node -pe "JSON.parse(require('fs').readFileSync(0,'utf8')).version")"
+
+          echo "previous=${PREV_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "current=${CURR_VERSION}" >> "$GITHUB_OUTPUT"
+
+          if [[ "${PREV_VERSION}" != "${CURR_VERSION}" ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Setup Node.js
+        if: steps.version.outputs.changed == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 18
@@ -25,14 +55,17 @@ jobs:
           cache-dependency-path: web_rviz/package-lock.json
 
       - name: Package tar.gz
+        if: steps.version.outputs.changed == 'true'
         run: bash scripts/package_tar.sh
 
       - name: Update latest tag
+        if: steps.version.outputs.changed == 'true'
         run: |
           git tag -f latest
           git push -f origin refs/tags/latest
 
       - name: Publish latest release
+        if: steps.version.outputs.changed == 'true'
         uses: ncipollo/release-action@v1
         with:
           tag: latest
@@ -41,3 +74,10 @@ jobs:
           allowUpdates: true
           replacesArtifacts: true
           omitBody: true
+
+      - name: Skip release (version unchanged)
+        if: steps.version.outputs.changed != 'true'
+        run: |
+          echo "package.json changed but version is unchanged:"
+          echo "previous=${{ steps.version.outputs.previous }}"
+          echo "current=${{ steps.version.outputs.current }}"

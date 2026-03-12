@@ -1,7 +1,7 @@
-import "./style.css";
+﻿import "./style.css";
 import { RuntimeConfig, loadConfig, saveConfig } from "./config";
 import { decodePointCloud2 } from "./ros/pointcloud";
-import { RosClient, TopicInfo } from "./ros/rosClient";
+import { MessageDetailsResponse, MessageTypeDef, RosClient, ServiceInfo, TopicInfo } from "./ros/rosClient";
 import { loadRvizSyncHints } from "./rviz/rvizConfig";
 import { loadRobotModel } from "./visualization/robotLoader";
 import { SceneManager } from "./visualization/sceneManager";
@@ -22,16 +22,29 @@ interface AppElements {
   logBox: HTMLElement;
   viewport: HTMLElement;
   jointValues: HTMLElement;
+  jointAngleUnit: HTMLSelectElement;
   cartesianFrame: HTMLSelectElement;
+  cartesianLengthUnit: HTMLSelectElement;
+  cartesianAngleUnit: HTMLSelectElement;
   cartesianValues: HTMLElement;
   tfTree: HTMLElement;
   trajRecordBtn: HTMLButtonElement;
   trajPlayBtn: HTMLButtonElement;
-  trajPauseBtn: HTMLButtonElement;
   trajClearBtn: HTMLButtonElement;
   trajProgress: HTMLInputElement;
-  trajInfo: HTMLElement;
   trajTime: HTMLElement;
+  rightTabRobot: HTMLButtonElement;
+  rightTabRosInfo: HTMLButtonElement;
+  robotStateView: HTMLElement;
+  rosInfoView: HTMLElement;
+  rosInfoTopics: HTMLElement;
+  rosInfoServices: HTMLElement;
+  rosInfoParams: HTMLElement;
+  loadAllParamsBtn: HTMLButtonElement;
+  detailModal: HTMLElement;
+  detailModalBackdrop: HTMLElement;
+  detailModalContent: HTMLElement;
+  detailModalClose: HTMLButtonElement;
 }
 
 interface TopicSubscriptions {
@@ -58,6 +71,11 @@ const RIGHT_SIDEBAR_STATE_KEY = "webrviz-right-sidebar-collapsed";
 const TRAJ_SAMPLE_INTERVAL_MS = 50;
 const TRAJ_MOTION_THRESHOLD = 0.001;
 const TRAJ_IDLE_STOP_MS = 800;
+const TRAJ_ICON_RECORD = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/></svg>';
+const TRAJ_ICON_STOP = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10"/></svg>';
+const TRAJ_ICON_PLAY = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
+const TRAJ_ICON_PAUSE = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>';
+const TRAJ_ICON_CLEAR = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke-width="2" stroke-linecap="round"/></svg>';
 
 function getElements(): AppElements {
   const byId = <T extends HTMLElement>(id: string): T => {
@@ -84,16 +102,29 @@ function getElements(): AppElements {
     logBox: byId<HTMLElement>("logBox"),
     viewport: byId<HTMLElement>("viewport"),
     jointValues: byId<HTMLElement>("jointValues"),
+    jointAngleUnit: byId<HTMLSelectElement>("jointAngleUnit"),
     cartesianFrame: byId<HTMLSelectElement>("cartesianFrame"),
+    cartesianLengthUnit: byId<HTMLSelectElement>("cartesianLengthUnit"),
+    cartesianAngleUnit: byId<HTMLSelectElement>("cartesianAngleUnit"),
     cartesianValues: byId<HTMLElement>("cartesianValues"),
     tfTree: byId<HTMLElement>("tfTree"),
     trajRecordBtn: byId<HTMLButtonElement>("trajRecordBtn"),
     trajPlayBtn: byId<HTMLButtonElement>("trajPlayBtn"),
-    trajPauseBtn: byId<HTMLButtonElement>("trajPauseBtn"),
     trajClearBtn: byId<HTMLButtonElement>("trajClearBtn"),
     trajProgress: byId<HTMLInputElement>("trajProgress"),
-    trajInfo: byId<HTMLElement>("trajInfo"),
-    trajTime: byId<HTMLElement>("trajTime")
+    trajTime: byId<HTMLElement>("trajTime"),
+    rightTabRobot: byId<HTMLButtonElement>("rightTabRobot"),
+    rightTabRosInfo: byId<HTMLButtonElement>("rightTabRosInfo"),
+    robotStateView: byId<HTMLElement>("robotStateView"),
+    rosInfoView: byId<HTMLElement>("rosInfoView"),
+    rosInfoTopics: byId<HTMLElement>("rosInfoTopics"),
+    rosInfoServices: byId<HTMLElement>("rosInfoServices"),
+    rosInfoParams: byId<HTMLElement>("rosInfoParams"),
+    loadAllParamsBtn: byId<HTMLButtonElement>("loadAllParamsBtn"),
+    detailModal: byId<HTMLElement>("detailModal"),
+    detailModalBackdrop: byId<HTMLElement>("detailModalBackdrop"),
+    detailModalContent: byId<HTMLElement>("detailModalContent"),
+    detailModalClose: byId<HTMLButtonElement>("detailModalClose")
   };
 }
 
@@ -126,6 +157,25 @@ let recordArmed = false;
 let recordArmBaseline: Map<string, number> | null = null;
 let recordLastMotionTime = 0;
 let recordLastPositions: Map<string, number> | null = null;
+type RightPanelTab = "robot" | "rosInfo";
+type AngleUnit = "deg" | "rad";
+type LengthUnit = "mm" | "m";
+
+const PARAM_EXCLUDE = new Set<string>([
+  "/robot_description",
+  "/robot_description_semantic",
+  "/robot_description_kinematics"
+]);
+const MAX_PARAM_VALUE_LENGTH = 500;
+
+let rightPanelTab: RightPanelTab = "robot";
+let services: ServiceInfo[] = [];
+let params: string[] = [];
+let rosInfoBusy = false;
+let jointAngleUnit: AngleUnit = "deg";
+let cartesianLengthUnit: LengthUnit = "mm";
+let cartesianAngleUnit: AngleUnit = "deg";
+
 
 function formatError(error: unknown): string {
   if (error instanceof Error) {
@@ -181,14 +231,21 @@ function formatNumber(value: number, digits = 3): string {
   return value.toFixed(digits);
 }
 
-function formatAngleRadians(value: number): string {
-  return `${formatNumber(value, 4)} rad`;
+function convertAngleFromRad(value: number, unit: AngleUnit): number {
+  return unit === "deg" ? (value * 180) / Math.PI : value;
 }
 
-function formatAngleDegrees(value: number): string {
-  return `${formatNumber(value, 1)} deg`;
+function convertLengthFromMeter(value: number, unit: LengthUnit): number {
+  return unit === "mm" ? value * 1000 : value;
 }
 
+function angleUnitLabel(unit: AngleUnit): string {
+  return unit === "deg" ? "deg" : "rad";
+}
+
+function lengthUnitLabel(unit: LengthUnit): string {
+  return unit === "mm" ? "mm" : "m";
+}
 function addDataRow(container: HTMLElement, label: string, value: string): void {
   const row = document.createElement("div");
   row.className = "data-row";
@@ -206,6 +263,342 @@ function renderPlaceholder(container: HTMLElement, label: string): void {
   addDataRow(container, label, "--");
 }
 
+function setRightPanelTab(tab: RightPanelTab): void {
+  rightPanelTab = tab;
+
+  const robotActive = rightPanelTab === "robot";
+  elements.rightTabRobot.classList.toggle("active", robotActive);
+  elements.rightTabRosInfo.classList.toggle("active", !robotActive);
+  elements.rightTabRobot.setAttribute("aria-selected", robotActive ? "true" : "false");
+  elements.rightTabRosInfo.setAttribute("aria-selected", robotActive ? "false" : "true");
+
+  elements.robotStateView.classList.toggle("active", robotActive);
+  elements.rosInfoView.classList.toggle("active", !robotActive);
+
+  renderRightPanel();
+}
+
+function showDetailModal(text: string): void {
+  elements.detailModalContent.textContent = text;
+  elements.detailModal.classList.add("active");
+  elements.detailModal.setAttribute("aria-hidden", "false");
+}
+
+function hideDetailModal(): void {
+  elements.detailModal.classList.remove("active");
+  elements.detailModal.setAttribute("aria-hidden", "true");
+}
+
+function formatUnknownValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function truncateValue(text: string, maxLength = MAX_PARAM_VALUE_LENGTH): string {
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, maxLength)} ... (truncated)`;
+}
+
+function parseParamValue(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function formatMessageDetail(type: string, details: MessageDetailsResponse): string {
+  const typedefs = details.typedefs ?? [];
+  if (typedefs.length === 0) {
+    return `No message info for ${type}`;
+  }
+
+  const typedefMap = new Map<string, MessageTypeDef>();
+  for (const def of typedefs) {
+    typedefMap.set(def.type, def);
+  }
+
+  if (!typedefMap.has(type)) {
+    return `No message info for ${type}`;
+  }
+
+  const printed = new Set<string>();
+  const output: string[] = [];
+
+  const printMessage = (messageType: string, isRoot: boolean): void => {
+    if (printed.has(messageType)) {
+      return;
+    }
+
+    const msg = typedefMap.get(messageType);
+    if (!msg) {
+      return;
+    }
+
+    printed.add(messageType);
+
+    if (isRoot) {
+      output.push(`# ${messageType}`);
+      output.push("----------------------------------");
+    } else {
+      output.push("");
+      output.push("=".repeat(80));
+      output.push(`MSG: ${messageType}`);
+    }
+
+    const count = Math.min(msg.fieldnames.length, msg.fieldtypes.length, msg.fieldarraylen.length);
+    for (let index = 0; index < count; index += 1) {
+      const name = msg.fieldnames[index];
+      const fieldType = msg.fieldtypes[index];
+      const arrLen = msg.fieldarraylen[index];
+
+      if (arrLen === -1) {
+        output.push(`${fieldType} ${name}`);
+      } else if (arrLen === 0) {
+        output.push(`${fieldType}[] ${name}`);
+      } else {
+        output.push(`${fieldType}[${arrLen}] ${name}`);
+      }
+    }
+
+    for (const fieldType of msg.fieldtypes) {
+      if (typedefMap.has(fieldType) && !printed.has(fieldType)) {
+        printMessage(fieldType, false);
+      }
+    }
+  };
+
+  printMessage(type, true);
+  return output.join("\n");
+}
+
+function formatMessageDetailAutoRoot(preferredType: string, details: MessageDetailsResponse): string {
+  const typedefs = details.typedefs ?? [];
+  if (typedefs.length === 0) {
+    return `No message info for ${preferredType}`;
+  }
+
+  const root = typedefs.some((item) => item.type === preferredType) ? preferredType : typedefs[0].type;
+  return formatMessageDetail(root, details);
+}
+
+async function showServiceTypeDetails(type: string): Promise<void> {
+  if (!type) {
+    return;
+  }
+
+  try {
+    showDetailModal(`Loading service details for ${type} ...`);
+    const details = await rosClient.getServiceDetails(type);
+
+    const requestText = formatMessageDetailAutoRoot(`${type}Request`, details.request);
+    const responseText = formatMessageDetailAutoRoot(`${type}Response`, details.response);
+
+    const output = [
+      `# ${type}`,
+      "----------------------------------",
+      "",
+      "[Request]",
+      requestText,
+      "",
+      "[Response]",
+      responseText
+    ].join("\n");
+
+    showDetailModal(output);
+  } catch (error) {
+    const detail = formatError(error);
+    showDetailModal(`Service detail is unavailable for ${type}: ${detail}`);
+    log(`service detail unavailable: ${detail}`);
+  }
+}
+function clearElement(container: HTMLElement): void {
+  container.innerHTML = "";
+}
+
+function renderInfoEmpty(container: HTMLElement, text: string): void {
+  clearElement(container);
+  const row = document.createElement("div");
+  row.className = "data-row";
+  row.textContent = text;
+  container.appendChild(row);
+}
+
+function addInfoItem(container: HTMLElement, name: string, actionText: string, actionClass: string, onClick?: () => void): void {
+  const item = document.createElement("div");
+  item.className = "info-item";
+
+  const nameSpan = document.createElement("span");
+  nameSpan.className = "info-item-name";
+  nameSpan.title = name;
+  nameSpan.textContent = name;
+
+  const action = document.createElement("button");
+  action.type = "button";
+  action.className = actionClass;
+  action.textContent = actionText || "unknown";
+  action.disabled = !onClick;
+  if (onClick) {
+    action.addEventListener("click", onClick);
+  }
+
+  item.appendChild(nameSpan);
+  item.appendChild(action);
+  container.appendChild(item);
+}
+
+async function showTopicTypeDetails(type: string): Promise<void> {
+  if (!type) {
+    showDetailModal("No type for this topic");
+    return;
+  }
+
+  try {
+    showDetailModal(`Loading message details for ${type} ...`);
+    const details = await rosClient.getMessageDetails(type);
+    showDetailModal(formatMessageDetail(type, details));
+  } catch (error) {
+    const detail = formatError(error);
+    showDetailModal(`Error getting message info for ${type}: ${detail}`);
+    log(`message detail failed: ${detail}`);
+  }
+}
+
+async function showParamValue(paramName: string): Promise<void> {
+  try {
+    showDetailModal(`Loading param value: ${paramName} ...`);
+    const raw = await rosClient.getParam(paramName);
+    const parsed = parseParamValue(raw);
+    const text = formatUnknownValue(parsed);
+    showDetailModal(`Value of param '${paramName}': ${truncateValue(text)}`);
+  } catch (error) {
+    const detail = formatError(error);
+    showDetailModal(`Error getting param '${paramName}': ${detail}`);
+    log(`param load failed: ${detail}`);
+  }
+}
+
+async function showAllParamValues(): Promise<void> {
+  if (rosInfoBusy) {
+    return;
+  }
+
+  rosInfoBusy = true;
+  elements.loadAllParamsBtn.disabled = true;
+
+  try {
+    const lines: string[] = [];
+    lines.push("Parameters:");
+    lines.push("----------------------------------");
+
+    const sorted = params.filter((name) => !PARAM_EXCLUDE.has(name)).sort((left, right) => left.localeCompare(right));
+
+    for (const param of sorted) {
+      try {
+        const raw = await rosClient.getParam(param);
+        const parsed = parseParamValue(raw);
+        const text = truncateValue(formatUnknownValue(parsed));
+        lines.push(`${param}: ${text}`);
+      } catch (error) {
+        lines.push(`${param}: <error: ${formatError(error)}>`);
+      }
+    }
+
+    showDetailModal(lines.join("\n"));
+  } finally {
+    rosInfoBusy = false;
+    elements.loadAllParamsBtn.disabled = false;
+  }
+}
+
+function renderRosInfoPanel(): void {
+  if (!rosClient.isConnected()) {
+    renderInfoEmpty(elements.rosInfoTopics, "not connected");
+    renderInfoEmpty(elements.rosInfoServices, "not connected");
+    renderInfoEmpty(elements.rosInfoParams, "not connected");
+    elements.loadAllParamsBtn.disabled = true;
+    return;
+  }
+
+  elements.loadAllParamsBtn.disabled = rosInfoBusy;
+
+  clearElement(elements.rosInfoTopics);
+  if (topics.length === 0) {
+    renderInfoEmpty(elements.rosInfoTopics, "no topics");
+  } else {
+    const sortedTopics = [...topics].sort((left, right) => left.name.localeCompare(right.name));
+    for (const topic of sortedTopics) {
+      addInfoItem(elements.rosInfoTopics, topic.name, topic.type || "unknown", "info-item-type", () => {
+        void showTopicTypeDetails(topic.type);
+      });
+    }
+  }
+
+  clearElement(elements.rosInfoServices);
+  if (services.length === 0) {
+    renderInfoEmpty(elements.rosInfoServices, "no services");
+  } else {
+    const sortedServices = [...services].sort((left, right) => left.name.localeCompare(right.name));
+    for (const service of sortedServices) {
+      addInfoItem(elements.rosInfoServices, service.name, service.type || "unknown", "info-item-type", () => {
+        void showServiceTypeDetails(service.type);
+      });
+    }
+  }
+
+  clearElement(elements.rosInfoParams);
+  if (params.length === 0) {
+    renderInfoEmpty(elements.rosInfoParams, "no params");
+  } else {
+    const sortedParams = [...params].sort((left, right) => left.localeCompare(right));
+    for (const param of sortedParams) {
+      addInfoItem(elements.rosInfoParams, param, "View", "info-item-action", () => {
+        void showParamValue(param);
+      });
+    }
+  }
+}
+
+function clearRosInfoState(): void {
+  services = [];
+  params = [];
+  rosInfoBusy = false;
+  elements.loadAllParamsBtn.disabled = true;
+  hideDetailModal();
+  renderRosInfoPanel();
+}
+
+async function refreshRosInfoCache(): Promise<void> {
+  if (!rosClient.isConnected()) {
+    clearRosInfoState();
+    return;
+  }
+
+  try {
+    const [nextServices, nextParams] = await Promise.all([
+      rosClient.listServicesWithTypes(),
+      rosClient.listParams()
+    ]);
+
+    services = nextServices;
+    params = nextParams;
+    renderRosInfoPanel();
+    log(`ROS info discovery finished: ${services.length} services, ${params.length} params`);
+  } catch (error) {
+    const detail = formatError(error);
+    log(`ROS info discovery warning: ${detail}`);
+    renderRosInfoPanel();
+  }
+}
 function quatToEuler(rotation: { x: number; y: number; z: number; w: number }): {
   roll: number;
   pitch: number;
@@ -238,8 +631,10 @@ function renderJointValues(): void {
   }
 
   elements.jointValues.innerHTML = "";
+  const unitText = angleUnitLabel(jointAngleUnit);
   for (const joint of jointState) {
-    addDataRow(elements.jointValues, joint.name, formatAngleRadians(joint.position));
+    const value = convertAngleFromRad(joint.position, jointAngleUnit);
+    addDataRow(elements.jointValues, `${joint.name} (${unitText})`, formatNumber(value));
   }
 }
 
@@ -304,13 +699,16 @@ function renderCartesianValues(): void {
   const rotation = transform.rotation;
   const euler = quatToEuler(rotation);
 
+  const lengthUnit = lengthUnitLabel(cartesianLengthUnit);
+  const angleUnit = angleUnitLabel(cartesianAngleUnit);
+
   elements.cartesianValues.innerHTML = "";
-  addDataRow(elements.cartesianValues, "X (m)", formatNumber(position.x));
-  addDataRow(elements.cartesianValues, "Y (m)", formatNumber(position.y));
-  addDataRow(elements.cartesianValues, "Z (m)", formatNumber(position.z));
-  addDataRow(elements.cartesianValues, "Roll (deg)", formatAngleDegrees((euler.roll * 180) / Math.PI));
-  addDataRow(elements.cartesianValues, "Pitch (deg)", formatAngleDegrees((euler.pitch * 180) / Math.PI));
-  addDataRow(elements.cartesianValues, "Yaw (deg)", formatAngleDegrees((euler.yaw * 180) / Math.PI));
+  addDataRow(elements.cartesianValues, `X (${lengthUnit})`, formatNumber(convertLengthFromMeter(position.x, cartesianLengthUnit)));
+  addDataRow(elements.cartesianValues, `Y (${lengthUnit})`, formatNumber(convertLengthFromMeter(position.y, cartesianLengthUnit)));
+  addDataRow(elements.cartesianValues, `Z (${lengthUnit})`, formatNumber(convertLengthFromMeter(position.z, cartesianLengthUnit)));
+  addDataRow(elements.cartesianValues, `Roll (${angleUnit})`, formatNumber(convertAngleFromRad(euler.roll, cartesianAngleUnit)));
+  addDataRow(elements.cartesianValues, `Pitch (${angleUnit})`, formatNumber(convertAngleFromRad(euler.pitch, cartesianAngleUnit)));
+  addDataRow(elements.cartesianValues, `Yaw (${angleUnit})`, formatNumber(convertAngleFromRad(euler.yaw, cartesianAngleUnit)));
 }
 
 function buildTfTreeLines(snapshot: Array<{ parent: string; child: string }>): string[] {
@@ -519,18 +917,17 @@ function updateTrajectoryUi(): void {
   const progress = durationMs > 0 ? Math.min(100, Math.max(0, Math.round((progressMs / durationMs) * 100))) : 0;
   elements.trajProgress.value = String(progress);
 
-  if (isRecording && recordArmed) {
-    elements.trajInfo.textContent = "armed";
-  } else {
-    elements.trajInfo.textContent = `${trajectory.length} frame${trajectory.length === 1 ? "" : "s"}`;
-  }
   elements.trajTime.textContent = `${(durationMs / 1000).toFixed(1)}s`;
 
-  elements.trajPlayBtn.disabled = trajectory.length === 0 || isPlaying;
-  elements.trajPauseBtn.disabled = !isPlaying;
+  const canPlay = trajectory.length > 0;
+  elements.trajPlayBtn.disabled = !canPlay;
   elements.trajClearBtn.disabled = trajectory.length === 0 && !isRecording && !isPlaying;
   elements.trajRecordBtn.disabled = isPlaying;
-  elements.trajRecordBtn.textContent = isRecording ? "Stop" : "Record";
+
+  elements.trajRecordBtn.innerHTML = isRecording ? TRAJ_ICON_STOP : TRAJ_ICON_RECORD;
+  elements.trajPlayBtn.innerHTML = isPlaying ? TRAJ_ICON_PAUSE : TRAJ_ICON_PLAY;
+  elements.trajClearBtn.innerHTML = TRAJ_ICON_CLEAR;
+
   elements.cartesianFrame.disabled = isPlaying;
 }
 function applyJointSnapshot(names: string[], positions: number[]): void {
@@ -611,6 +1008,16 @@ function playbackLoop(): void {
   playbackFrameHandle = window.requestAnimationFrame(playbackLoop);
 }
 
+function enableEndEffectorPreview(): void {
+  const endEffectorFrame = sceneManager.getDefaultEndEffectorFrame();
+  if (endEffectorFrame) {
+    cartesianFrame = endEffectorFrame;
+    elements.cartesianFrame.value = cartesianFrame;
+  }
+  sceneManager.setEndEffectorFrame(cartesianFrame || endEffectorFrame);
+  sceneManager.setShowOnlyEndEffector(true);
+}
+
 function startPlayback(): void {
   if (trajectory.length === 0) {
     return;
@@ -625,13 +1032,7 @@ function startPlayback(): void {
   isPlaying = true;
   isPlaybackPaused = false;
 
-  const endEffectorFrame = sceneManager.getDefaultEndEffectorFrame();
-  if (endEffectorFrame) {
-    cartesianFrame = endEffectorFrame;
-    elements.cartesianFrame.value = cartesianFrame;
-  }
-  sceneManager.setEndEffectorFrame(cartesianFrame || endEffectorFrame);
-  sceneManager.setShowOnlyEndEffector(true);
+  enableEndEffectorPreview();
 
   playbackStartTime = performance.now() - trajectory[playbackIndex].t;
   updateTrajectoryUi();
@@ -757,17 +1158,27 @@ function recordTrajectorySnapshot(message: unknown): void {
   updateTrajectoryUi();
 }
 function renderRightPanel(): void {
-  renderJointValues();
-  updateFrameOptions();
-  renderCartesianValues();
-  renderTfTree();
-  updateTrajectoryUi();
+  if (rightPanelTab === "robot") {
+    renderJointValues();
+    updateFrameOptions();
+    renderCartesianValues();
+    renderTfTree();
+    updateTrajectoryUi();
+    return;
+  }
+
+  renderRosInfoPanel();
 }
 
 function scheduleRightPanelUpdate(): void {
+  if (rightPanelTab !== "robot") {
+    return;
+  }
+
   if (pendingRightPanelUpdate) {
     return;
   }
+
   pendingRightPanelUpdate = true;
   window.requestAnimationFrame(() => {
     pendingRightPanelUpdate = false;
@@ -780,6 +1191,7 @@ function clearRightPanelState(): void {
   cartesianFrame = "";
   lastFrameOptions = [];
   elements.cartesianFrame.innerHTML = "";
+  clearRosInfoState();
   renderRightPanel();
 }
 
@@ -877,6 +1289,7 @@ async function refreshTopicCache(): Promise<void> {
   topics = await rosClient.listTopicsWithTypes();
   const cloudTopics = pointCloudTopicNames(topics);
   updatePointCloudOptions(cloudTopics, elements.pointCloudTopic.value || config.defaultPointCloudTopic);
+  renderRosInfoPanel();
   log(`topic discovery finished: ${topics.length} topics, ${cloudTopics.length} pointcloud topics`);
 }
 
@@ -956,6 +1369,7 @@ async function connect(): Promise<void> {
   }
 
   await refreshTopicCache();
+  await refreshRosInfoCache();
   await subscribeCoreTopics();
 
   const cloudTopics = pointCloudTopicNames(topics);
@@ -975,6 +1389,7 @@ async function connect(): Promise<void> {
 
 function disconnect(): void {
   clearSubscriptions();
+  topics = [];
   rosClient.disconnect();
   sceneManager.setPointCloud(null);
   sceneManager.setRobot(null);
@@ -1013,6 +1428,7 @@ async function syncFromRviz(): Promise<void> {
   }
 
   await refreshTopicCache();
+  await refreshRosInfoCache();
 
   const availableCloudTopics = pointCloudTopicNames(topics);
   const desiredTopic = choosePointCloudTopic(
@@ -1037,8 +1453,13 @@ async function syncFromRviz(): Promise<void> {
 renderConfigToUi();
 updatePointCloudOptions([], config.defaultPointCloudTopic);
 updateStatusLabel("disconnected");
+jointAngleUnit = elements.jointAngleUnit.value as AngleUnit;
+cartesianLengthUnit = elements.cartesianLengthUnit.value as LengthUnit;
+cartesianAngleUnit = elements.cartesianAngleUnit.value as AngleUnit;
 setSidebarCollapsed(sidebarCollapsed);
 setRightSidebarCollapsed(rightSidebarCollapsed);
+setRightPanelTab("robot");
+clearRosInfoState();
 renderRightPanel();
 updateTrajectoryUi();
 
@@ -1077,6 +1498,47 @@ elements.sidebarToggleBtn.addEventListener("click", () => {
 
 elements.rightSidebarToggleBtn.addEventListener("click", () => {
   setRightSidebarCollapsed(!rightSidebarCollapsed);
+});
+
+elements.rightTabRobot.addEventListener("click", () => {
+  setRightPanelTab("robot");
+});
+
+elements.rightTabRosInfo.addEventListener("click", () => {
+  setRightPanelTab("rosInfo");
+});
+
+elements.loadAllParamsBtn.addEventListener("click", () => {
+  void showAllParamValues();
+});
+
+elements.detailModalClose.addEventListener("click", () => {
+  hideDetailModal();
+});
+
+elements.detailModalBackdrop.addEventListener("click", () => {
+  hideDetailModal();
+});
+
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    hideDetailModal();
+  }
+});
+
+elements.jointAngleUnit.addEventListener("change", () => {
+  jointAngleUnit = elements.jointAngleUnit.value as AngleUnit;
+  scheduleRightPanelUpdate();
+});
+
+elements.cartesianLengthUnit.addEventListener("change", () => {
+  cartesianLengthUnit = elements.cartesianLengthUnit.value as LengthUnit;
+  scheduleRightPanelUpdate();
+});
+
+elements.cartesianAngleUnit.addEventListener("change", () => {
+  cartesianAngleUnit = elements.cartesianAngleUnit.value as AngleUnit;
+  scheduleRightPanelUpdate();
 });
 
 elements.cartesianFrame.addEventListener("change", () => {
@@ -1122,16 +1584,19 @@ elements.trajRecordBtn.addEventListener("click", () => {
   updateTrajectoryUi();
 });
 elements.trajPlayBtn.addEventListener("click", () => {
-  if (isPlaying || trajectory.length === 0) {
+  if (isPlaying) {
+    pausePlayback();
+    log("trajectory paused");
     return;
   }
-  startPlayback();
-  log("trajectory play");
-});
 
-elements.trajPauseBtn.addEventListener("click", () => {
-  pausePlayback();
-  log("trajectory paused");
+  if (trajectory.length === 0) {
+    return;
+  }
+
+  const resume = isPlaybackPaused;
+  startPlayback();
+  log(resume ? "trajectory resumed" : "trajectory play");
 });
 
 elements.trajClearBtn.addEventListener("click", () => {
@@ -1152,9 +1617,9 @@ elements.trajProgress.addEventListener("input", () => {
   let index = 0;
   while (index < trajectory.length - 1 && trajectory[index].t < targetTime) {
     index += 1;
-  log(`trajectory scrubbed: ${Math.round(percent * 100)}%`);
   }
 
+  enableEndEffectorPreview();
   pausePlayback();
   setPlaybackIndex(index);
   log(`trajectory scrubbed: ${Math.round(percent * 100)}%`);
@@ -1183,6 +1648,46 @@ window.addEventListener("beforeunload", () => {
 });
 
 log("WebRviz ready. Click Connect to start.");
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
