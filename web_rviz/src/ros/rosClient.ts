@@ -7,6 +7,27 @@ export interface TopicInfo {
   type: string;
 }
 
+export interface ServiceInfo {
+  name: string;
+  type: string;
+}
+
+export interface MessageTypeDef {
+  type: string;
+  fieldnames: string[];
+  fieldtypes: string[];
+  fieldarraylen: number[];
+}
+
+export interface MessageDetailsResponse {
+  typedefs?: MessageTypeDef[];
+}
+
+export interface ServiceDetailsResponse {
+  request: MessageDetailsResponse;
+  response: MessageDetailsResponse;
+}
+
 type StateListener = (state: ConnectionState, message?: string) => void;
 
 interface TopicsResponse {
@@ -15,6 +36,18 @@ interface TopicsResponse {
 
 interface TopicTypeResponse {
   type: string;
+}
+
+interface ServicesResponse {
+  services: string[];
+}
+
+interface ServiceTypeResponse {
+  type: string;
+}
+
+interface GetParamNamesResponse {
+  names: string[];
 }
 
 interface GetParamResponse {
@@ -119,6 +152,58 @@ export class RosClient {
     return result;
   }
 
+  async listServicesWithTypes(): Promise<ServiceInfo[]> {
+    const servicesResponse = await this.callService<Record<string, never>, ServicesResponse>(
+      "/rosapi/services",
+      "rosapi/Services",
+      {}
+    );
+
+    const result: ServiceInfo[] = [];
+    for (const name of servicesResponse.services) {
+      try {
+        const typeResponse = await this.callService<{ service: string }, ServiceTypeResponse>(
+          "/rosapi/service_type",
+          "rosapi/ServiceType",
+          { service: name }
+        );
+
+        result.push({ name, type: typeResponse.type });
+      } catch {
+        result.push({ name, type: "" });
+      }
+    }
+
+    return result;
+  }
+
+  async listParams(): Promise<string[]> {
+    const response = await this.callService<Record<string, never>, GetParamNamesResponse>(
+      "/rosapi/get_param_names",
+      "rosapi/GetParamNames",
+      {}
+    );
+
+    return response.names || [];
+  }
+
+  async getMessageDetails(type: string): Promise<MessageDetailsResponse> {
+    return this.callService<{ type: string }, MessageDetailsResponse>(
+      "/rosapi/message_details",
+      "rosapi/MessageDetails",
+      { type }
+    );
+  }
+
+  async getServiceDetails(type: string): Promise<ServiceDetailsResponse> {
+    const [request, response] = await Promise.all([
+      this.getServiceRequestDetails(type),
+      this.getServiceResponseDetails(type)
+    ]);
+
+    return { request, response };
+  }
+
   async getParam(name: string): Promise<string> {
     const response = await this.callService<{ name: string }, GetParamResponse>(
       "/rosapi/get_param",
@@ -127,6 +212,40 @@ export class RosClient {
     );
 
     return response.value;
+  }
+
+  private async getServiceRequestDetails(type: string): Promise<MessageDetailsResponse> {
+    try {
+      return await this.callService<{ type: string }, MessageDetailsResponse>(
+        "/rosapi/service_request_details",
+        "rosapi/ServiceRequestDetails",
+        { type }
+      );
+    } catch {
+      // compatibility fallback for rosapi variants that expect `service`.
+      return this.callService<{ service: string }, MessageDetailsResponse>(
+        "/rosapi/service_request_details",
+        "rosapi/ServiceRequestDetails",
+        { service: type }
+      );
+    }
+  }
+
+  private async getServiceResponseDetails(type: string): Promise<MessageDetailsResponse> {
+    try {
+      return await this.callService<{ type: string }, MessageDetailsResponse>(
+        "/rosapi/service_response_details",
+        "rosapi/ServiceResponseDetails",
+        { type }
+      );
+    } catch {
+      // compatibility fallback for rosapi variants that expect `service`.
+      return this.callService<{ service: string }, MessageDetailsResponse>(
+        "/rosapi/service_response_details",
+        "rosapi/ServiceResponseDetails",
+        { service: type }
+      );
+    }
   }
 
   private async callService<TRequest extends object, TResponse>(

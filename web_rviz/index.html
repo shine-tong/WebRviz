@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -45,45 +45,92 @@
       <main id="viewport">
         <button id="sidebarToggleBtn" type="button" aria-label="Toggle sidebar">Hide Sidebar</button>
         <button id="rightSidebarToggleBtn" type="button" aria-label="Toggle right sidebar">&lt;</button>
+
+        <div id="trajDock" aria-label="Trajectory control dock">
+          <button id="trajRecordBtn" class="icon-btn" type="button" title="Record" aria-label="Record"></button>
+          <button id="trajPlayBtn" class="icon-btn" type="button" title="Play/Pause" aria-label="Play/Pause"></button>
+          <button id="trajClearBtn" class="icon-btn" type="button" title="Clear" aria-label="Clear"></button>
+          <input id="trajProgress" type="range" min="0" max="100" value="0" />
+          <strong id="trajTime">0.0s</strong>
+        </div>
       </main>
 
       <aside class="panel panel-right" id="rightSidebar">
-        <h2>Robot State</h2>
+        <div class="tabs" role="tablist" aria-label="Right panel tabs">
+          <button id="rightTabRobot" class="tab-button active" type="button" role="tab" aria-selected="true">
+            Robot State
+          </button>
+          <button id="rightTabRosInfo" class="tab-button" type="button" role="tab" aria-selected="false">
+            ROS Info
+          </button>
+        </div>
 
-        <section class="panel-section">
-          <h3>Joint Angles</h3>
-          <div id="jointValues" class="data-list"></div>
-        </section>
+        <div id="robotStateView" class="panel-view active">
+          <h2>Robot State</h2>
 
-        <section class="panel-section">
-          <h3>Cartesian</h3>
-          <label for="cartesianFrame">Frame</label>
-          <select id="cartesianFrame"></select>
-          <div id="cartesianValues" class="data-list"></div>
-        </section>
+          <section class="panel-section">
+            <h3>Joint Angles</h3>
+            <select id="jointAngleUnit">
+              <option value="deg" selected>deg</option>
+              <option value="rad">rad</option>
+            </select>
+            <div id="jointValues" class="data-list"></div>
+          </section>
 
-        <section class="panel-section">
-          <h3>Trajectory</h3>
-          <div class="row row-compact">
-            <button id="trajRecordBtn" type="button">Record</button>
-            <button id="trajPlayBtn" type="button">Play</button>
-          </div>
-          <div class="row row-compact">
-            <button id="trajPauseBtn" type="button">Pause</button>
-            <button id="trajClearBtn" type="button">Clear</button>
-          </div>
-          <input id="trajProgress" type="range" min="0" max="100" value="0" />
-          <div class="kv small">
-            <span id="trajInfo">0 frames</span>
-            <strong id="trajTime">0.0s</strong>
-          </div>
-        </section>
+          <section class="panel-section">
+            <h3>Cartesian</h3>
+            <label for="cartesianFrame">Frame</label>
+            <select id="cartesianFrame"></select>
+            <div class="row row-compact">
+              <select id="cartesianLengthUnit">
+                <option value="mm" selected>mm</option>
+                <option value="m">m</option>
+              </select>
+              <select id="cartesianAngleUnit">
+                <option value="deg" selected>deg</option>
+                <option value="rad">rad</option>
+              </select>
+            </div>
+            <div id="cartesianValues" class="data-list"></div>
+          </section>
 
-        <section class="panel-section">
-          <h3>TF Tree</h3>
-          <pre id="tfTree"></pre>
-        </section>
+          <section class="panel-section">
+            <h3>TF Tree</h3>
+            <pre id="tfTree"></pre>
+          </section>
+        </div>
+
+        <div id="rosInfoView" class="panel-view">
+          <h2>ROS Info</h2>
+
+          <section class="panel-section">
+            <h3>Topics</h3>
+            <div id="rosInfoTopics" class="info-list"></div>
+          </section>
+
+          <section class="panel-section">
+            <h3>Services</h3>
+            <div id="rosInfoServices" class="info-list"></div>
+          </section>
+
+          <section class="panel-section">
+            <h3>Params</h3>
+            <button id="loadAllParamsBtn" type="button">Load All Params</button>
+            <div id="rosInfoParams" class="info-list"></div>
+          </section>
+        </div>
       </aside>
+    </div>
+
+    <div id="detailModal" class="detail-modal" aria-hidden="true">
+      <div id="detailModalBackdrop" class="detail-modal-backdrop"></div>
+      <div class="detail-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="detailModalTitle">
+        <div class="detail-modal-header">
+          <h3 id="detailModalTitle">DETAIL</h3>
+          <button id="detailModalClose" type="button" aria-label="Close detail">Close</button>
+        </div>
+        <pre id="detailModalContent">No content</pre>
+      </div>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

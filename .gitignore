@@ -10,3 +10,6 @@ web_rviz/.vite/
 *.log
 .DS_Store
 Thumbs.db
+
+# python cache
+web_rviz/tools/__pycache__/
