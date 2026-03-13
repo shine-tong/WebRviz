@@ -162,7 +162,7 @@ http://127.0.0.1:8080
 
 > Windows 下的安装方式参照上述步骤
 
-### 3.2 启动前配置
+#### 3.2 启动前配置
 
 - 确保已经启动 `demo.launch` 和 `rosbridge`
 - 若开启的 `ufw` 需要放开防火墙端口
@@ -174,7 +174,7 @@ http://127.0.0.1:8080
   hostname -I
   ```
 
-### 3.3 启动配置
+#### 3.3 启动配置
 ```bash
 python tools/serve_webrviz.py \
   --dist dist \
