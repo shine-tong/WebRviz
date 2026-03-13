@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - dev
     paths:
       - 'docs/**'
 
@@ -11,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -35,12 +36,14 @@ jobs:
         working-directory: docs
         run: make html-all
 
-      - name: Upload Pages artifact
+      - name: Upload Pages artifact (master only)
+        if: github.ref == 'refs/heads/master'
         uses: actions/upload-pages-artifact@v3
         with:
           path: docs/_build/site
 
   deploy-pages:
+    if: github.ref == 'refs/heads/master'
     needs: build-docs
     runs-on: ubuntu-latest
     permissions:
