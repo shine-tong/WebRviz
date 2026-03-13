@@ -156,6 +156,45 @@ WEBRVIZ_MOUNTS="--mount urdf_package_name=~/your_ws/src/urdf_package_name"
 http://127.0.0.1:8080
 ```
 
+### 3. Windows 下运行
+
+#### 3.1 安装
+
+> Windows 下的安装方式参照上述步骤
+
+#### 3.2 启动前配置
+
+- 确保已经启动 `demo.launch` 和 `rosbridge`
+- 若开启的 `ufw` 需要放开防火墙端口
+  ```bash
+  sudo ufw allow 9090/tcp
+  ```
+- 查看 Ubuntu IP 地址
+  ```bash
+  hostname -I
+  ```
+
+#### 3.3 启动配置
+```bash
+python tools/serve_webrviz.py \
+  --dist dist \
+  --mount urdf_package_name="your_path\urdf_package_name" \
+  --host 0.0.0.0 \
+  --port 8080
+```
+
+启动成功后访问页面，然后在 `rosbridge URL` 栏中填写 Ubuntu IP 地址
+```
+ws://yourUbuntu-ip:9090
+```
+
+若提示连接失败，请检查：
+- Windows 和 Ubuntu 是否同网段可互通
+- Ubuntu是否在监听 9090 端口
+  ```bash
+  ss -lntp | grep 9090
+  ```
+- 地址前缀是否为 `ws://`（不是 `http://`）
 
 ---
 

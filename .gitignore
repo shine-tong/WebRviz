@@ -13,3 +13,6 @@ Thumbs.db
 
 # python cache
 web_rviz/tools/__pycache__/
+# Sphinx docs build outputs
+docs/_build/
+docs/__pycache__/

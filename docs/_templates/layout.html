@@ -1,0 +1,12 @@
+﻿{% extends "!layout.html" %}
+
+{% block sidebartitle %}
+  {{ super() }}
+  <div class="lang-switcher">
+    {% if doc_lang == "zh" %}
+      <a href="/en/{{ pagename }}.html" hreflang="en">English</a>
+    {% else %}
+      <a href="/{{ pagename }}.html" hreflang="zh-CN">中文</a>
+    {% endif %}
+  </div>
+{% endblock %}
