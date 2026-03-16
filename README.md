@@ -11,13 +11,14 @@
 
 ## 功能特性
 
-- 在网页中显示机器人 URDF 模型。
-- 同步订阅：`/tf`、`/tf_static`、`/joint_states`、`sensor_msgs/PointCloud2`。
-- 一键同步 RViz 配置（固定坐标系与点云候选话题）。
-- 右侧信息栏：关节角度、笛卡尔坐标、TF 树以及当前话题、服务和参数等详细信息。
-- 轨迹录制与回放：支持暂停、拖动进度、重播。
-- 操作日志：左下角日志框记录关键操作。
-- 本地部署，低资源占用。
+- 在网页中显示机器人 URDF 模型，并同步渲染 `/tf`、`/tf_static`、`/joint_states`、`sensor_msgs/PointCloud2`。
+- 支持一键同步 RViz 配置，包括固定坐标系与点云候选话题。
+- 左侧面板支持中英文切换、亮色/暗色主题切换，以及自适应布局。
+- 右侧 `Robot State` 面板包含关节角度、笛卡尔位置、TF 树，并支持在 3D 视图中显示全部 / 隐藏全部 / 按需选择 TF。
+- 右侧 `ROS Info` 面板支持浏览 topic、service、param 列表，并查看消息、服务和参数详情。
+- 轨迹录制与回放支持暂停、进度拖动、时间显示与回放预览。
+- 左下角日志框会记录连接、同步、轨迹操作，并单独输出 MoveIt 规划与执行状态。
+- 本地部署，资源占用较低，适合嵌入桌面端或局域网使用。
 
 ![WebRviz](web_rviz/assets/webrviz.png)
 
@@ -219,24 +220,24 @@ npm run preview
 | `URDF fallback URL` | `/robot_description` 不可用时使用 | `/urdf/five_axis.urdf` |
 | `URDF package root URL` | `package://` 对应 HTTP 根路径 | `/ros_pkgs` |
 | `PointCloud2 topic` | 点云话题，支持自动发现 | `/pointcloud/output` |
-
-配置会保存到浏览器 `localStorage`：
+配置与界面偏好会保存到浏览器 `localStorage`：
 
 ```text
 webrviz-runtime-config
+webrviz-language
+webrviz-theme
 ```
-
----
-
 ## 右侧信息栏说明
 
 > 默认隐藏，可通过中间箭头展开或收起
 
 ### 1. Robot State
 
-- 关节角度：显示当前 `/joint_states`。
-- 笛卡尔坐标：下拉框仅保留 `link` 信息，默认选择 TF 树中的最后一个 link 作为 TCP link。
-- TF 树：展示当前 TF 结构，标注选中帧与固定帧。
+- 关节角度：显示当前 `/joint_states`，支持 `deg / rad` 单位切换。
+- 笛卡尔位置：默认选择最后一个 link 作为 `TCP link`，支持长度和角度单位切换。
+- TF 树：右侧文本始终展示当前 TF 层级；上方按钮用于控制中间 3D 视图中的 TF 坐标轴显示。
+- `显示全部 / 隐藏全部`：控制 3D 视图中 TF 坐标轴的整体显示状态。
+- `选择 TF`：按需选择一个或多个 TF，只在中间 3D 视图中显示选中的 TF。
 
 ### 2. ROS Info
 
@@ -245,7 +246,6 @@ webrviz-runtime-config
 - 点击 `service` 的 `type` 可查看 service 详细结构（含 Request/Response）。
 - 点击 `param` 可查看当前值；支持一键加载并查看全部参数值。
 
----
 
 ## 轨迹录制与回放
 
@@ -253,13 +253,15 @@ webrviz-runtime-config
 - `▶`：播放已录制的运动轨迹。
 - `⏸`：暂停在当前帧，可继续播放。
 - `✖`：清除已录制的运动轨迹。
-> 进度条拖动会暂停并跳到对应帧。
+- 进度条拖动会暂停并跳到对应帧，右侧时间会同步显示当前进度 / 总时长。
 
 ---
 
 ## 日志输出
 
-- 左下角日志框记录关键操作（连接、同步、录制、回放、帧选择等）。
+- 左下角日志框记录关键操作，包括连接、同步、录制、回放、TF 选择等。
+- MoveIt 相关事件会使用 `[MoveIt]` 绿色前缀输出，例如规划开始、规划完成、开始执行、执行完成。
+- 日志支持紧凑换行显示，便于在较小窗口中阅读。
 
 ---
 
