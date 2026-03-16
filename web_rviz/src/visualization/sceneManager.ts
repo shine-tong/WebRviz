@@ -63,6 +63,7 @@ export class SceneManager {
   private targetFps: number;
   private lastRenderTimestamp = 0;
   private currentTheme: SceneTheme = "dark";
+  private visibleTfFrames: Set<string> | null = null;
 
   constructor(container: HTMLElement, targetFps: number) {
     this.container = container;
@@ -164,6 +165,11 @@ export class SceneManager {
     this.refreshFrameTransforms();
   }
 
+
+  setVisibleTfFrames(frames: Iterable<string> | null): void {
+    this.visibleTfFrames = frames ? new Set(frames) : null;
+    this.refreshFrameTransforms();
+  }
   getDefaultEndEffectorFrame(): string {
     if (!this.robot) {
       return this.robotBaseFrame;
@@ -464,6 +470,11 @@ export class SceneManager {
         continue;
       }
 
+
+      if (this.visibleTfFrames !== null && !this.visibleTfFrames.has(frame)) {
+        axis.visible = false;
+        continue;
+      }
       const relative = this.computeRelativeMatrix(frame, cache);
       axis.visible = relative !== null;
       if (relative) {
@@ -587,6 +598,7 @@ export class SceneManager {
     window.requestAnimationFrame(this.loop);
   }
 }
+
 
 
 

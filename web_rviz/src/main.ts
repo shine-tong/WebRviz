@@ -31,6 +31,9 @@ interface AppElements {
   cartesianLengthUnit: HTMLSelectElement;
   cartesianAngleUnit: HTMLSelectElement;
   cartesianValues: HTMLElement;
+  tfToggleAllBtn: HTMLButtonElement;
+  tfSelectBtn: HTMLButtonElement;
+  tfFilterMenu: HTMLElement;
   tfTree: HTMLElement;
   trajRecordBtn: HTMLButtonElement;
   trajPlayBtn: HTMLButtonElement;
@@ -127,6 +130,9 @@ function getElements(): AppElements {
     cartesianLengthUnit: byId<HTMLSelectElement>("cartesianLengthUnit"),
     cartesianAngleUnit: byId<HTMLSelectElement>("cartesianAngleUnit"),
     cartesianValues: byId<HTMLElement>("cartesianValues"),
+    tfToggleAllBtn: byId<HTMLButtonElement>("tfToggleAllBtn"),
+    tfSelectBtn: byId<HTMLButtonElement>("tfSelectBtn"),
+    tfFilterMenu: byId<HTMLElement>("tfFilterMenu"),
     tfTree: byId<HTMLElement>("tfTree"),
     trajRecordBtn: byId<HTMLButtonElement>("trajRecordBtn"),
     trajPlayBtn: byId<HTMLButtonElement>("trajPlayBtn"),
@@ -164,6 +170,10 @@ let rightSidebarCollapsed = window.localStorage.getItem(RIGHT_SIDEBAR_STATE_KEY)
 let jointState: JointSnapshot[] = [];
 let cartesianFrame = "";
 let lastFrameOptions: string[] = [];
+let tfVisibilityMode: TfVisibilityMode = "all";
+let lastNonSelectionTfVisibilityMode: Exclude<TfVisibilityMode, "selection"> = "all";
+let selectedTfFrames = new Set<string>();
+let tfFilterMenuOpen = false;
 let pendingRightPanelUpdate = false;
 let trajectory: TrajectoryFrame[] = [];
 let isRecording = false;
@@ -181,6 +191,7 @@ let recordLastPositions: Map<string, number> | null = null;
 type RightPanelTab = "robot" | "rosInfo";
 type AngleUnit = "deg" | "rad";
 type LengthUnit = "mm" | "m";
+type TfVisibilityMode = "all" | "none" | "selection";
 
 const PARAM_EXCLUDE = new Set<string>([
   "/robot_description",
@@ -619,6 +630,11 @@ function setRightPanelTab(tab: RightPanelTab): void {
 
   elements.robotStateView.classList.toggle("active", robotActive);
   elements.rosInfoView.classList.toggle("active", !robotActive);
+
+  if (!robotActive) {
+    tfFilterMenuOpen = false;
+    elements.tfFilterMenu.hidden = true;
+  }
 
   renderRightPanel();
 }
@@ -1076,8 +1092,12 @@ function renderCartesianValues(): void {
   addDataRow(elements.cartesianValues, `Yaw (${angleUnit})`, formatNumber(convertAngleFromRad(euler.yaw, cartesianAngleUnit)));
 }
 
-function buildTfTreeLines(snapshot: Array<{ parent: string; child: string }>): string[] {
+function buildTfTreeLines(snapshot: Array<{ parent: string; child: string }>, visibleNodes: Set<string> | null = null): string[] {
   if (snapshot.length === 0) {
+    return [];
+  }
+
+  if (visibleNodes && visibleNodes.size === 0) {
     return [];
   }
 
@@ -1089,6 +1109,11 @@ function buildTfTreeLines(snapshot: Array<{ parent: string; child: string }>): s
     if (!edge.parent || !edge.child) {
       continue;
     }
+
+    if (visibleNodes && (!visibleNodes.has(edge.parent) || !visibleNodes.has(edge.child))) {
+      continue;
+    }
+
     nodes.add(edge.parent);
     nodes.add(edge.child);
     childrenSet.add(edge.child);
@@ -1250,9 +1275,125 @@ function getTfTreeOrder(snapshot: Array<{ parent: string; child: string }>): str
   return order;
 }
 
+function pruneSelectedTfFrames(availableFrames: string[]): void {
+  const availableSet = new Set(availableFrames);
+  const nextSelected = new Set<string>();
+  for (const frame of selectedTfFrames) {
+    if (availableSet.has(frame)) {
+      nextSelected.add(frame);
+    }
+  }
+  selectedTfFrames = nextSelected;
+  if (selectedTfFrames.size === 0 && tfVisibilityMode === "selection") {
+    tfVisibilityMode = lastNonSelectionTfVisibilityMode;
+  }
+}
+
+function getVisibleTfNodes(snapshot: Array<{ parent: string; child: string }>): Set<string> | null {
+  if (tfVisibilityMode !== "selection") {
+    return tfVisibilityMode === "none" ? new Set<string>() : null;
+  }
+
+  const allFrames = new Set<string>();
+  for (const edge of snapshot) {
+    if (edge.parent) {
+      allFrames.add(edge.parent);
+    }
+    if (edge.child) {
+      allFrames.add(edge.child);
+    }
+  }
+
+  const visible = new Set<string>();
+  for (const frame of selectedTfFrames) {
+    if (allFrames.has(frame)) {
+      visible.add(frame);
+    }
+  }
+
+  return visible;
+}
+
+function updateTfToolbarUi(availableFrames: string[]): void {
+  const hasFrames = availableFrames.length > 0;
+  const baseVisibilityMode = tfVisibilityMode === "selection" ? lastNonSelectionTfVisibilityMode : tfVisibilityMode;
+  const toggleKey = baseVisibilityMode === "all" ? "button.hideAllTf" : "button.showAllTf";
+  elements.tfToggleAllBtn.textContent = t(currentLanguage, toggleKey as "button.hideAllTf" | "button.showAllTf");
+  elements.tfToggleAllBtn.disabled = !hasFrames;
+
+  const selectedCount = selectedTfFrames.size;
+  const selectLabel = selectedCount > 0
+    ? t(currentLanguage, "button.selectTf") + ` (${selectedCount})`
+    : t(currentLanguage, "button.selectTf");
+  elements.tfSelectBtn.textContent = selectLabel;
+  elements.tfSelectBtn.disabled = !hasFrames;
+  elements.tfSelectBtn.setAttribute("aria-expanded", tfFilterMenuOpen ? "true" : "false");
+}
+
+function renderTfFilterMenu(availableFrames: string[]): void {
+  elements.tfFilterMenu.innerHTML = "";
+  elements.tfFilterMenu.hidden = !tfFilterMenuOpen;
+
+  if (!tfFilterMenuOpen) {
+    return;
+  }
+
+  if (availableFrames.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "tf-filter-empty";
+    empty.textContent = t(currentLanguage, "state.noTfData");
+    elements.tfFilterMenu.appendChild(empty);
+    return;
+  }
+
+  for (const frame of availableFrames) {
+    const selected = selectedTfFrames.has(frame);
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = selected ? "tf-filter-item selected" : "tf-filter-item";
+    option.setAttribute("aria-pressed", selected ? "true" : "false");
+    option.addEventListener("click", () => {
+      if (selectedTfFrames.has(frame)) {
+        selectedTfFrames.delete(frame);
+      } else {
+        selectedTfFrames.add(frame);
+      }
+      tfVisibilityMode = selectedTfFrames.size > 0 ? "selection" : lastNonSelectionTfVisibilityMode;
+      renderTfTree();
+    });
+
+    const mark = document.createElement("input");
+    mark.type = "checkbox";
+    mark.className = "tf-filter-check";
+    mark.checked = selected;
+    mark.tabIndex = -1;
+    mark.setAttribute("aria-hidden", "true");
+
+    const text = document.createElement("span");
+    text.className = "tf-filter-label";
+    text.textContent = frame;
+
+    option.appendChild(mark);
+    option.appendChild(text);
+    elements.tfFilterMenu.appendChild(option);
+  }
+}
+
+
+
+function applyTfVisualizationFilter(snapshot: Array<{ parent: string; child: string }>): void {
+  sceneManager.setVisibleTfFrames(getVisibleTfNodes(snapshot));
+}
+
 function renderTfTree(): void {
   const snapshot = sceneManager.getTfSnapshot();
-  const lines = buildTfTreeLines(snapshot);
+  const availableFrames = getTfTreeOrder(snapshot);
+  pruneSelectedTfFrames(availableFrames);
+  applyTfVisualizationFilter(snapshot);
+  updateTfToolbarUi(availableFrames);
+  renderTfFilterMenu(availableFrames);
+
+  const lines = buildTfTreeLines(snapshot, null);
   if (lines.length === 0) {
     elements.tfTree.textContent = t(currentLanguage, "state.noTfData");
     return;
@@ -1276,13 +1417,32 @@ function getTrajectoryProgressMs(): number {
   return trajectory[index].t;
 }
 
+function getDisplayedTrajectoryProgressMs(): number {
+  const durationMs = getTrajectoryDurationMs();
+  if (durationMs <= 0) {
+    return 0;
+  }
+
+  if (isPlaying) {
+    return Math.min(durationMs, Math.max(0, performance.now() - playbackStartTime));
+  }
+
+  return getTrajectoryProgressMs();
+}
+function formatTrajectoryTime(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return String(minutes).padStart(2, "0") + ":" + String(seconds).padStart(2, "0");
+}
+
 function updateTrajectoryUi(): void {
   const durationMs = getTrajectoryDurationMs();
-  const progressMs = getTrajectoryProgressMs();
+  const progressMs = getDisplayedTrajectoryProgressMs();
   const progress = durationMs > 0 ? Math.min(100, Math.max(0, Math.round((progressMs / durationMs) * 100))) : 0;
   elements.trajProgress.value = String(progress);
 
-  elements.trajTime.textContent = (durationMs / 1000).toFixed(1) + t(currentLanguage, "unit.seconds");
+  elements.trajTime.textContent = formatTrajectoryTime(progressMs) + " / " + formatTrajectoryTime(durationMs);
 
   const canPlay = trajectory.length > 0;
   elements.trajPlayBtn.disabled = !canPlay;
@@ -1537,7 +1697,15 @@ function renderRightPanel(): void {
     renderJointValues();
     updateFrameOptions();
     renderCartesianValues();
-    renderTfTree();
+    if (tfFilterMenuOpen) {
+      const snapshot = sceneManager.getTfSnapshot();
+      const availableFrames = getTfTreeOrder(snapshot);
+      pruneSelectedTfFrames(availableFrames);
+      applyTfVisualizationFilter(snapshot);
+      updateTfToolbarUi(availableFrames);
+    } else {
+      renderTfTree();
+    }
     updateTrajectoryUi();
     return;
   }
@@ -1910,6 +2078,43 @@ elements.rightTabRosInfo.addEventListener("click", () => {
   setRightPanelTab("rosInfo");
 });
 
+elements.tfToggleAllBtn.addEventListener("click", () => {
+  lastNonSelectionTfVisibilityMode = lastNonSelectionTfVisibilityMode === "all" ? "none" : "all";
+  if (selectedTfFrames.size === 0) {
+    tfVisibilityMode = lastNonSelectionTfVisibilityMode;
+  }
+  tfFilterMenuOpen = false;
+  renderTfTree();
+});
+
+elements.tfSelectBtn.addEventListener("click", (event) => {
+  event.stopPropagation();
+  if (elements.tfSelectBtn.disabled) {
+    return;
+  }
+  tfFilterMenuOpen = !tfFilterMenuOpen;
+  renderTfTree();
+});
+
+elements.tfFilterMenu.addEventListener("click", (event) => {
+  event.stopPropagation();
+});
+
+document.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+  if (!tfFilterMenuOpen) {
+    return;
+  }
+  if (target.closest("#tfFilterMenu") || target.closest("#tfSelectBtn")) {
+    return;
+  }
+  tfFilterMenuOpen = false;
+  renderTfTree();
+});
+
 elements.loadAllParamsBtn.addEventListener("click", () => {
   void showAllParamValues();
 });
@@ -2050,6 +2255,15 @@ window.addEventListener("beforeunload", () => {
 });
 
 log(t(currentLanguage, "log.ready"));
+
+
+
+
+
+
+
+
+
 
 
 
