@@ -1,4 +1,4 @@
-import {
+﻿import {
   AmbientLight,
   AxesHelper,
   BufferAttribute,
@@ -17,6 +17,8 @@ import {
   WebGLRenderer
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+
+export type SceneTheme = "dark" | "light";
 
 interface TfRecord {
   parent: string;
@@ -60,6 +62,7 @@ export class SceneManager {
   private fixedFrame = "base_link";
   private targetFps: number;
   private lastRenderTimestamp = 0;
+  private currentTheme: SceneTheme = "dark";
 
   constructor(container: HTMLElement, targetFps: number) {
     this.container = container;
@@ -83,7 +86,7 @@ export class SceneManager {
     this.robotLayer = new Group();
     this.tfLayer = new Group();
 
-    this.worldGrid = new GridHelper(10, 20, 0x37506a, 0x293949);
+    this.worldGrid = new GridHelper(10, 20, 0x4e6f94, 0x3a5470);
     // RViz uses Z-up with Grid plane XY, so rotate Three.js grid from XZ to XY.
     this.worldGrid.rotation.x = Math.PI / 2;
     this.worldGrid.position.set(0, 0, 0);
@@ -107,6 +110,7 @@ export class SceneManager {
     this.scene.add(this.tfLayer);
 
     this.container.appendChild(this.renderer.domElement);
+    this.setTheme("dark");
 
     this.onResize = this.onResize.bind(this);
     window.addEventListener("resize", this.onResize);
@@ -117,6 +121,19 @@ export class SceneManager {
 
   setTargetFps(value: number): void {
     this.targetFps = Math.max(1, value);
+  }
+
+  setTheme(theme: SceneTheme): void {
+    this.currentTheme = theme;
+
+    if (theme === "light") {
+      this.scene.background = new Color(0xeef3f8);
+      this.updateGridColors(0x9fb7cf, 0xc8d8e6);
+      return;
+    }
+
+    this.scene.background = new Color(0x0b1016);
+    this.updateGridColors(0x4e6f94, 0x3a5470);
   }
 
   setFixedFrame(frame: string): void {
@@ -539,6 +556,16 @@ export class SceneManager {
 
     object3D.position.copy(position);
     object3D.quaternion.copy(rotation);
+  }
+
+  private updateGridColors(centerLine: number, gridLine: number): void {
+    const materials = Array.isArray(this.worldGrid.material) ? this.worldGrid.material : [this.worldGrid.material];
+    if (materials[0]) {
+      materials[0].color.setHex(centerLine);
+    }
+    if (materials[1]) {
+      materials[1].color.setHex(gridLine);
+    }
   }
 
   private onResize(): void {

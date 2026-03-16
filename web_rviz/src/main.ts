@@ -1,10 +1,12 @@
 ﻿import "./style.css";
 import { RuntimeConfig, loadConfig, saveConfig } from "./config";
 import { decodePointCloud2 } from "./ros/pointcloud";
-import { MessageDetailsResponse, MessageTypeDef, RosClient, ServiceInfo, TopicInfo } from "./ros/rosClient";
+import { ConnectionState, MessageDetailsResponse, MessageTypeDef, RosClient, ServiceInfo, TopicInfo } from "./ros/rosClient";
 import { loadRvizSyncHints } from "./rviz/rvizConfig";
 import { loadRobotModel } from "./visualization/robotLoader";
 import { SceneManager } from "./visualization/sceneManager";
+import { applyStaticTranslations, applyTheme, Language, loadLanguage, loadTheme, saveLanguage, saveTheme, t, ThemeMode } from "./uiSettings";
+import { enhanceSelect, refreshEnhancedSelect } from "./customSelect";
 
 interface AppElements {
   appRoot: HTMLElement;
@@ -13,6 +15,8 @@ interface AppElements {
   urdfFallbackPath: HTMLInputElement;
   packageRootUrl: HTMLInputElement;
   pointCloudTopic: HTMLSelectElement;
+  languageToggleBtn: HTMLButtonElement;
+  themeToggleBtn: HTMLButtonElement;
   connectBtn: HTMLButtonElement;
   syncBtn: HTMLButtonElement;
   sidebarToggleBtn: HTMLButtonElement;
@@ -52,6 +56,10 @@ interface TopicSubscriptions {
   tf?: any;
   tfStatic?: any;
   pointCloud?: any;
+  moveGroupGoal?: any;
+  moveGroupResult?: any;
+  executeTrajectoryGoal?: any;
+  executeTrajectoryResult?: any;
 }
 
 interface JointSnapshot {
@@ -65,7 +73,17 @@ interface TrajectoryFrame {
   positions: number[];
 }
 
+interface LogEntry {
+  time: string;
+  message: string;
+  kind: "default" | "moveit";
+}
+
 const POINTCLOUD2_TYPE = "sensor_msgs/PointCloud2";
+const MOVE_GROUP_GOAL_TOPIC = "/move_group/goal";
+const MOVE_GROUP_RESULT_TOPIC = "/move_group/result";
+const EXECUTE_TRAJECTORY_GOAL_TOPIC = "/execute_trajectory/goal";
+const EXECUTE_TRAJECTORY_RESULT_TOPIC = "/execute_trajectory/result";
 const SIDEBAR_STATE_KEY = "webrviz-sidebar-collapsed";
 const RIGHT_SIDEBAR_STATE_KEY = "webrviz-right-sidebar-collapsed";
 const TRAJ_SAMPLE_INTERVAL_MS = 50;
@@ -93,6 +111,8 @@ function getElements(): AppElements {
     urdfFallbackPath: byId<HTMLInputElement>("urdfFallbackPath"),
     packageRootUrl: byId<HTMLInputElement>("packageRootUrl"),
     pointCloudTopic: byId<HTMLSelectElement>("pointCloudTopic"),
+    languageToggleBtn: byId<HTMLButtonElement>("languageToggleBtn"),
+    themeToggleBtn: byId<HTMLButtonElement>("themeToggleBtn"),
     connectBtn: byId<HTMLButtonElement>("connectBtn"),
     syncBtn: byId<HTMLButtonElement>("syncBtn"),
     sidebarToggleBtn: byId<HTMLButtonElement>("sidebarToggleBtn"),
@@ -136,6 +156,7 @@ const sceneManager = new SceneManager(elements.viewport, config.targetFps);
 sceneManager.setFixedFrame(config.fixedFrame);
 
 let topics: TopicInfo[] = [];
+let logEntries: LogEntry[] = [];
 let subscriptions: TopicSubscriptions = {};
 let lastPointCloudTimestamp = 0;
 let sidebarCollapsed = window.localStorage.getItem(SIDEBAR_STATE_KEY) === "1";
@@ -175,6 +196,10 @@ let rosInfoBusy = false;
 let jointAngleUnit: AngleUnit = "deg";
 let cartesianLengthUnit: LengthUnit = "mm";
 let cartesianAngleUnit: AngleUnit = "deg";
+let currentLanguage: Language = loadLanguage();
+let currentTheme: ThemeMode = loadTheme();
+let lastConnectionState: ConnectionState = "disconnected";
+let lastConnectionDetail: string | undefined;
 
 
 function formatError(error: unknown): string {
@@ -184,39 +209,358 @@ function formatError(error: unknown): string {
   return String(error);
 }
 
+function formatStatusDetail(detail?: string): string | undefined {
+  if (!detail) {
+    return undefined;
+  }
+
+  if (detail === "connected") {
+    return t(currentLanguage, "statusDetail.connected");
+  }
+
+  if (detail === "disconnected") {
+    return t(currentLanguage, "statusDetail.disconnected");
+  }
+
+  if (detail === "connection closed") {
+    return t(currentLanguage, "statusDetail.connectionClosed");
+  }
+
+  if (detail.startsWith("connecting to ")) {
+    const url = detail.slice("connecting to ".length);
+    return currentLanguage === "zh" ? "连接到 " + url : "connecting to " + url;
+  }
+
+  return detail;
+}
+
+function updateLanguageToggleUi(): void {
+  elements.languageToggleBtn.textContent = currentLanguage === "en" ? "中文" : "EN";
+  elements.languageToggleBtn.title = t(currentLanguage, "button.switchLanguage");
+  elements.languageToggleBtn.setAttribute("aria-label", t(currentLanguage, "button.switchLanguage"));
+}
+
+function updateThemeToggleUi(): void {
+  const nextThemeKey = currentTheme === "dark" ? "button.themeLight" : "button.themeDark";
+  elements.themeToggleBtn.textContent = t(currentLanguage, nextThemeKey as "button.themeLight" | "button.themeDark");
+  elements.themeToggleBtn.title = t(currentLanguage, "button.switchTheme");
+  elements.themeToggleBtn.setAttribute("aria-label", t(currentLanguage, "button.switchTheme"));
+}
+
+function updateConnectButtonText(): void {
+  elements.connectBtn.textContent = lastConnectionState === "connected"
+    ? t(currentLanguage, "button.disconnect")
+    : t(currentLanguage, "button.connect");
+}
+
+function updateSidebarToggleUi(): void {
+  elements.sidebarToggleBtn.textContent = sidebarCollapsed ? t(currentLanguage, "button.showSidebar") : t(currentLanguage, "button.hideSidebar");
+  elements.sidebarToggleBtn.setAttribute("aria-label", elements.sidebarToggleBtn.textContent);
+}
+
+function updateRightSidebarToggleUi(): void {
+  elements.rightSidebarToggleBtn.textContent = rightSidebarCollapsed ? "<" : ">";
+  elements.rightSidebarToggleBtn.setAttribute(
+    "aria-label",
+    rightSidebarCollapsed ? t(currentLanguage, "button.showRightSidebar") : t(currentLanguage, "button.hideRightSidebar")
+  );
+}
+
+function updateTabLabels(): void {
+  elements.rightTabRobot.textContent = t(currentLanguage, "panel.robotState");
+  elements.rightTabRosInfo.textContent = t(currentLanguage, "panel.rosInfo");
+}
+
+function refreshUiText(): void {
+  applyStaticTranslations(currentLanguage);
+  updateLanguageToggleUi();
+  updateThemeToggleUi();
+  updateConnectButtonText();
+  updateSidebarToggleUi();
+  updateRightSidebarToggleUi();
+  updateTabLabels();
+  updateStatusLabel(lastConnectionState, lastConnectionDetail);
+  renderRightPanel();
+  updateTrajectoryUi();
+}
+
 function log(message: string): void {
-  const now = new Date().toLocaleTimeString();
-  const line = `[${now}] ${message}`;
-  const existing = elements.logBox.textContent ? `${elements.logBox.textContent}\n` : "";
-  const lines = `${existing}${line}`.split("\n");
-  elements.logBox.textContent = lines.slice(-120).join("\n");
+  appendLogEntry(message, "default");
+}
+
+function logMoveIt(message: string): void {
+  const normalized = message.startsWith("MoveIt ") ? message.slice("MoveIt ".length) : message;
+  appendLogEntry(normalized, "moveit");
+}
+
+function appendLogEntry(message: string, kind: LogEntry["kind"]): void {
+  logEntries.push({
+    time: new Date().toLocaleTimeString(),
+    message,
+    kind
+  });
+
+  if (logEntries.length > 120) {
+    logEntries = logEntries.slice(-120);
+  }
+
+  renderLogEntries();
+}
+
+function renderLogEntries(): void {
+  elements.logBox.innerHTML = "";
+
+  for (const entry of logEntries) {
+    const line = document.createElement("div");
+    line.className = "log-line";
+
+    const time = document.createElement("span");
+    time.className = "log-time";
+    time.textContent = "[" + entry.time + "]";
+    line.appendChild(time);
+
+    if (entry.kind === "moveit") {
+      const prefix = document.createElement("span");
+      prefix.className = "log-prefix log-prefix-moveit";
+      prefix.textContent = "[MoveIt]";
+      line.appendChild(prefix);
+    }
+
+    const messageElement = document.createElement("span");
+    messageElement.className = "log-message";
+    messageElement.textContent = entry.message;
+    line.appendChild(messageElement);
+
+    elements.logBox.appendChild(line);
+  }
+
   elements.logBox.scrollTop = elements.logBox.scrollHeight;
 }
 
-function updateStatusLabel(state: string, detail?: string): void {
-  elements.connectionStatus.textContent = detail ? `${state} (${detail})` : state;
+function findTopicInfo(name: string): TopicInfo | undefined {
+  return topics.find((topic) => topic.name === name);
+}
+
+function actionStatusText(statusCode: number): string {
+  switch (statusCode) {
+    case 0:
+      return "pending";
+    case 1:
+      return "active";
+    case 2:
+      return "preempted";
+    case 3:
+      return "succeeded";
+    case 4:
+      return "aborted";
+    case 5:
+      return "rejected";
+    case 6:
+      return "preempting";
+    case 7:
+      return "recalling";
+    case 8:
+      return "recalled";
+    case 9:
+      return "lost";
+    default:
+      return "unknown(" + String(statusCode) + ")";
+  }
+}
+
+function formatSecondsValue(value: unknown, digits = 2): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  return value.toFixed(digits) + "s";
+}
+
+function subscribeMoveItTopics(): void {
+  unsubscribe(subscriptions.moveGroupGoal);
+  unsubscribe(subscriptions.moveGroupResult);
+  unsubscribe(subscriptions.executeTrajectoryGoal);
+  unsubscribe(subscriptions.executeTrajectoryResult);
+  subscriptions.moveGroupGoal = undefined;
+  subscriptions.moveGroupResult = undefined;
+  subscriptions.executeTrajectoryGoal = undefined;
+  subscriptions.executeTrajectoryResult = undefined;
+
+  const subscribed: string[] = [];
+
+  const subscribeIfAvailable = (
+    topicName: string,
+    fallbackType: string,
+    assign: (topic: any) => void,
+    onMessage: (message: unknown) => void
+  ): void => {
+    const info = findTopicInfo(topicName);
+    if (!info) {
+      return;
+    }
+
+    const topicType = info.type || fallbackType;
+    try {
+      const topic = rosClient.createTopic(topicName, topicType);
+      topic.subscribe(onMessage);
+      assign(topic);
+      subscribed.push(topicName);
+    } catch (error) {
+      logMoveIt("monitor skipped " + topicName + ": " + formatError(error));
+    }
+  };
+
+  subscribeIfAvailable(MOVE_GROUP_GOAL_TOPIC, "moveit_msgs/MoveGroupActionGoal", (topic) => {
+    subscriptions.moveGroupGoal = topic;
+  }, (message) => {
+    const goal = message as {
+      goal?: {
+        request?: {
+          planner_id?: string;
+          group_name?: string;
+          num_planning_attempts?: number;
+          allowed_planning_time?: number;
+        };
+        planning_options?: {
+          plan_only?: boolean;
+        };
+      };
+    };
+
+    const request = goal.goal?.request;
+    const plannerId = request?.planner_id?.trim() || "default";
+    const groupName = request?.group_name?.trim() || "unknown";
+    const parts = [
+      "MoveIt planning started",
+      "planner=" + plannerId,
+      "group=" + groupName
+    ];
+
+    if (typeof request?.num_planning_attempts === "number" && Number.isFinite(request.num_planning_attempts)) {
+      parts.push("attempts=" + String(request.num_planning_attempts));
+    }
+
+    const allowedTime = formatSecondsValue(request?.allowed_planning_time);
+    if (allowedTime) {
+      parts.push("allowed_time=" + allowedTime);
+    }
+
+    if (goal.goal?.planning_options?.plan_only) {
+      parts.push("plan_only=true");
+    }
+
+    logMoveIt(parts.join(" | "));
+  });
+
+  subscribeIfAvailable(MOVE_GROUP_RESULT_TOPIC, "moveit_msgs/MoveGroupActionResult", (topic) => {
+    subscriptions.moveGroupResult = topic;
+  }, (message) => {
+    const resultMessage = message as {
+      status?: { status?: number };
+      result?: {
+        planning_time?: number;
+        error_code?: { val?: number };
+      };
+    };
+
+    const statusCode = typeof resultMessage.status?.status === "number" ? resultMessage.status.status : -1;
+    const parts = [
+      "MoveIt planning finished",
+      "status=" + actionStatusText(statusCode)
+    ];
+
+    const planningTime = formatSecondsValue(resultMessage.result?.planning_time, 3);
+    if (planningTime) {
+      parts.push("planning_time=" + planningTime);
+    }
+
+    if (typeof resultMessage.result?.error_code?.val === "number") {
+      parts.push("error_code=" + String(resultMessage.result.error_code.val));
+    }
+
+    logMoveIt(parts.join(" | "));
+  });
+
+  subscribeIfAvailable(EXECUTE_TRAJECTORY_GOAL_TOPIC, "moveit_msgs/ExecuteTrajectoryActionGoal", (topic) => {
+    subscriptions.executeTrajectoryGoal = topic;
+  }, (message) => {
+    const goal = message as {
+      goal?: {
+        trajectory?: {
+          joint_trajectory?: {
+            joint_names?: string[];
+            points?: unknown[];
+          };
+        };
+      };
+    };
+
+    const jointCount = Array.isArray(goal.goal?.trajectory?.joint_trajectory?.joint_names)
+      ? goal.goal?.trajectory?.joint_trajectory?.joint_names?.length ?? 0
+      : 0;
+    const pointCount = Array.isArray(goal.goal?.trajectory?.joint_trajectory?.points)
+      ? goal.goal?.trajectory?.joint_trajectory?.points?.length ?? 0
+      : 0;
+    const parts = ["MoveIt execution started"];
+
+    if (jointCount > 0) {
+      parts.push("joints=" + String(jointCount));
+    }
+    if (pointCount > 0) {
+      parts.push("points=" + String(pointCount));
+    }
+
+    logMoveIt(parts.join(" | "));
+  });
+
+  subscribeIfAvailable(EXECUTE_TRAJECTORY_RESULT_TOPIC, "moveit_msgs/ExecuteTrajectoryActionResult", (topic) => {
+    subscriptions.executeTrajectoryResult = topic;
+  }, (message) => {
+    const resultMessage = message as {
+      status?: { status?: number };
+      result?: {
+        error_code?: { val?: number };
+      };
+    };
+
+    const statusCode = typeof resultMessage.status?.status === "number" ? resultMessage.status.status : -1;
+    const parts = [
+      "MoveIt execution finished",
+      "status=" + actionStatusText(statusCode)
+    ];
+
+    if (typeof resultMessage.result?.error_code?.val === "number") {
+      parts.push("error_code=" + String(resultMessage.result.error_code.val));
+    }
+
+    logMoveIt(parts.join(" | "));
+  });
+
+  if (subscribed.length > 0) {
+    logMoveIt("monitor subscribed: " + subscribed.join(", "));
+  }
+}
+
+function updateStatusLabel(state: ConnectionState, detail?: string): void {
+  const stateKey = ("status." + state) as "status.disconnected" | "status.connecting" | "status.connected" | "status.error";
+  const stateText = t(currentLanguage, stateKey);
+  const detailText = formatStatusDetail(detail);
+  elements.connectionStatus.textContent = detailText && detailText !== stateText ? stateText + " (" + detailText + ")" : stateText;
 }
 
 function setSidebarCollapsed(collapsed: boolean): void {
   sidebarCollapsed = collapsed;
   elements.appRoot.classList.toggle("sidebar-collapsed", sidebarCollapsed);
-  elements.sidebarToggleBtn.textContent = sidebarCollapsed ? "Show Sidebar" : "Hide Sidebar";
+  updateSidebarToggleUi();
   window.localStorage.setItem(SIDEBAR_STATE_KEY, sidebarCollapsed ? "1" : "0");
 
-  // Trigger canvas resize after layout change.
   window.requestAnimationFrame(() => {
     window.dispatchEvent(new Event("resize"));
   });
 }
-
 function setRightSidebarCollapsed(collapsed: boolean): void {
   rightSidebarCollapsed = collapsed;
   elements.appRoot.classList.toggle("right-sidebar-collapsed", rightSidebarCollapsed);
-  elements.rightSidebarToggleBtn.textContent = rightSidebarCollapsed ? "<" : ">";
-  elements.rightSidebarToggleBtn.setAttribute(
-    "aria-label",
-    rightSidebarCollapsed ? "Show right sidebar" : "Hide right sidebar"
-  );
+  updateRightSidebarToggleUi();
   window.localStorage.setItem(RIGHT_SIDEBAR_STATE_KEY, rightSidebarCollapsed ? "1" : "0");
 
   window.requestAnimationFrame(() => {
@@ -265,6 +609,7 @@ function renderPlaceholder(container: HTMLElement, label: string): void {
 
 function setRightPanelTab(tab: RightPanelTab): void {
   rightPanelTab = tab;
+  updateTabLabels();
 
   const robotActive = rightPanelTab === "robot";
   elements.rightTabRobot.classList.toggle("active", robotActive);
@@ -279,7 +624,25 @@ function setRightPanelTab(tab: RightPanelTab): void {
 }
 
 function showDetailModal(text: string): void {
+  elements.detailModalContent.classList.remove("param-detail-content");
   elements.detailModalContent.textContent = text;
+  elements.detailModal.classList.add("active");
+  elements.detailModal.setAttribute("aria-hidden", "false");
+}
+
+function showParamDetailModal(paramName: string, value: string): void {
+  elements.detailModalContent.classList.add("param-detail-content");
+  elements.detailModalContent.textContent = "";
+
+  const labelText = document.createTextNode(t(currentLanguage, "detail.paramValueLabel", { paramName }));
+  elements.detailModalContent.appendChild(labelText);
+
+  const valueSpan = document.createElement("span");
+  valueSpan.className = "param-detail-value";
+  valueSpan.textContent = ": " + value;
+  valueSpan.style.color = "var(--param-value)";
+  elements.detailModalContent.appendChild(valueSpan);
+
   elements.detailModal.classList.add("active");
   elements.detailModal.setAttribute("aria-hidden", "false");
 }
@@ -319,7 +682,7 @@ function parseParamValue(raw: string): unknown {
 function formatMessageDetail(type: string, details: MessageDetailsResponse): string {
   const typedefs = details.typedefs ?? [];
   if (typedefs.length === 0) {
-    return `No message info for ${type}`;
+    return t(currentLanguage, "detail.noMessageInfo", { type });
   }
 
   const typedefMap = new Map<string, MessageTypeDef>();
@@ -328,7 +691,7 @@ function formatMessageDetail(type: string, details: MessageDetailsResponse): str
   }
 
   if (!typedefMap.has(type)) {
-    return `No message info for ${type}`;
+    return t(currentLanguage, "detail.noMessageInfo", { type });
   }
 
   const printed = new Set<string>();
@@ -384,7 +747,7 @@ function formatMessageDetail(type: string, details: MessageDetailsResponse): str
 function formatMessageDetailAutoRoot(preferredType: string, details: MessageDetailsResponse): string {
   const typedefs = details.typedefs ?? [];
   if (typedefs.length === 0) {
-    return `No message info for ${preferredType}`;
+    return t(currentLanguage, "detail.noMessageInfo", { type: preferredType });
   }
 
   const root = typedefs.some((item) => item.type === preferredType) ? preferredType : typedefs[0].type;
@@ -397,7 +760,7 @@ async function showServiceTypeDetails(type: string): Promise<void> {
   }
 
   try {
-    showDetailModal(`Loading service details for ${type} ...`);
+    showDetailModal(t(currentLanguage, "detail.loadingService", { type }));
     const details = await rosClient.getServiceDetails(type);
 
     const requestText = formatMessageDetailAutoRoot(`${type}Request`, details.request);
@@ -407,17 +770,17 @@ async function showServiceTypeDetails(type: string): Promise<void> {
       `# ${type}`,
       "----------------------------------",
       "",
-      "[Request]",
+      t(currentLanguage, "detail.request"),
       requestText,
       "",
-      "[Response]",
+      t(currentLanguage, "detail.response"),
       responseText
     ].join("\n");
 
     showDetailModal(output);
   } catch (error) {
     const detail = formatError(error);
-    showDetailModal(`Service detail is unavailable for ${type}: ${detail}`);
+    showDetailModal(t(currentLanguage, "detail.serviceUnavailable", { type, detail }));
     log(`service detail unavailable: ${detail}`);
   }
 }
@@ -445,7 +808,7 @@ function addInfoItem(container: HTMLElement, name: string, actionText: string, a
   const action = document.createElement("button");
   action.type = "button";
   action.className = actionClass;
-  action.textContent = actionText || "unknown";
+  action.textContent = actionText || t(currentLanguage, "common.unknown");
   action.disabled = !onClick;
   if (onClick) {
     action.addEventListener("click", onClick);
@@ -458,31 +821,31 @@ function addInfoItem(container: HTMLElement, name: string, actionText: string, a
 
 async function showTopicTypeDetails(type: string): Promise<void> {
   if (!type) {
-    showDetailModal("No type for this topic");
+    showDetailModal(t(currentLanguage, "detail.noTypeForTopic"));
     return;
   }
 
   try {
-    showDetailModal(`Loading message details for ${type} ...`);
+    showDetailModal(t(currentLanguage, "detail.loadingMessage", { type }));
     const details = await rosClient.getMessageDetails(type);
     showDetailModal(formatMessageDetail(type, details));
   } catch (error) {
     const detail = formatError(error);
-    showDetailModal(`Error getting message info for ${type}: ${detail}`);
+    showDetailModal(t(currentLanguage, "detail.messageError", { type, detail }));
     log(`message detail failed: ${detail}`);
   }
 }
 
 async function showParamValue(paramName: string): Promise<void> {
   try {
-    showDetailModal(`Loading param value: ${paramName} ...`);
+    showDetailModal(t(currentLanguage, "detail.loadingParam", { paramName }));
     const raw = await rosClient.getParam(paramName);
     const parsed = parseParamValue(raw);
     const text = formatUnknownValue(parsed);
-    showDetailModal(`Value of param '${paramName}': ${truncateValue(text)}`);
+    showParamDetailModal(paramName, truncateValue(text));
   } catch (error) {
     const detail = formatError(error);
-    showDetailModal(`Error getting param '${paramName}': ${detail}`);
+    showDetailModal(t(currentLanguage, "detail.paramError", { paramName, detail }));
     log(`param load failed: ${detail}`);
   }
 }
@@ -497,7 +860,7 @@ async function showAllParamValues(): Promise<void> {
 
   try {
     const lines: string[] = [];
-    lines.push("Parameters:");
+    lines.push(t(currentLanguage, "detail.parametersTitle"));
     lines.push("----------------------------------");
 
     const sorted = params.filter((name) => !PARAM_EXCLUDE.has(name)).sort((left, right) => left.localeCompare(right));
@@ -509,7 +872,7 @@ async function showAllParamValues(): Promise<void> {
         const text = truncateValue(formatUnknownValue(parsed));
         lines.push(`${param}: ${text}`);
       } catch (error) {
-        lines.push(`${param}: <error: ${formatError(error)}>`);
+        lines.push(`${param}: ${t(currentLanguage, "detail.errorValue", { detail: formatError(error) })}`);
       }
     }
 
@@ -522,9 +885,9 @@ async function showAllParamValues(): Promise<void> {
 
 function renderRosInfoPanel(): void {
   if (!rosClient.isConnected()) {
-    renderInfoEmpty(elements.rosInfoTopics, "not connected");
-    renderInfoEmpty(elements.rosInfoServices, "not connected");
-    renderInfoEmpty(elements.rosInfoParams, "not connected");
+    renderInfoEmpty(elements.rosInfoTopics, t(currentLanguage, "state.notConnected"));
+    renderInfoEmpty(elements.rosInfoServices, t(currentLanguage, "state.notConnected"));
+    renderInfoEmpty(elements.rosInfoParams, t(currentLanguage, "state.notConnected"));
     elements.loadAllParamsBtn.disabled = true;
     return;
   }
@@ -533,11 +896,11 @@ function renderRosInfoPanel(): void {
 
   clearElement(elements.rosInfoTopics);
   if (topics.length === 0) {
-    renderInfoEmpty(elements.rosInfoTopics, "no topics");
+    renderInfoEmpty(elements.rosInfoTopics, t(currentLanguage, "state.noTopics"));
   } else {
     const sortedTopics = [...topics].sort((left, right) => left.name.localeCompare(right.name));
     for (const topic of sortedTopics) {
-      addInfoItem(elements.rosInfoTopics, topic.name, topic.type || "unknown", "info-item-type", () => {
+      addInfoItem(elements.rosInfoTopics, topic.name, topic.type || t(currentLanguage, "common.unknown"), "info-item-type", () => {
         void showTopicTypeDetails(topic.type);
       });
     }
@@ -545,11 +908,11 @@ function renderRosInfoPanel(): void {
 
   clearElement(elements.rosInfoServices);
   if (services.length === 0) {
-    renderInfoEmpty(elements.rosInfoServices, "no services");
+    renderInfoEmpty(elements.rosInfoServices, t(currentLanguage, "state.noServices"));
   } else {
     const sortedServices = [...services].sort((left, right) => left.name.localeCompare(right.name));
     for (const service of sortedServices) {
-      addInfoItem(elements.rosInfoServices, service.name, service.type || "unknown", "info-item-type", () => {
+      addInfoItem(elements.rosInfoServices, service.name, service.type || t(currentLanguage, "common.unknown"), "info-item-type", () => {
         void showServiceTypeDetails(service.type);
       });
     }
@@ -557,11 +920,11 @@ function renderRosInfoPanel(): void {
 
   clearElement(elements.rosInfoParams);
   if (params.length === 0) {
-    renderInfoEmpty(elements.rosInfoParams, "no params");
+    renderInfoEmpty(elements.rosInfoParams, t(currentLanguage, "state.noParams"));
   } else {
     const sortedParams = [...params].sort((left, right) => left.localeCompare(right));
     for (const param of sortedParams) {
-      addInfoItem(elements.rosInfoParams, param, "View", "info-item-action", () => {
+      addInfoItem(elements.rosInfoParams, param, t(currentLanguage, "button.view"), "info-item-action", () => {
         void showParamValue(param);
       });
     }
@@ -626,7 +989,7 @@ function quatToEuler(rotation: { x: number; y: number; z: number; w: number }): 
 
 function renderJointValues(): void {
   if (jointState.length === 0) {
-    renderPlaceholder(elements.jointValues, "no joint data");
+    renderPlaceholder(elements.jointValues, t(currentLanguage, "state.noJointData"));
     return;
   }
 
@@ -644,6 +1007,7 @@ function updateFrameOptions(): void {
     elements.cartesianFrame.innerHTML = "";
     cartesianFrame = "";
     lastFrameOptions = [];
+    refreshEnhancedSelect(elements.cartesianFrame);
     return;
   }
 
@@ -682,16 +1046,17 @@ function updateFrameOptions(): void {
     frames[0];
   cartesianFrame = frames.includes(preferred) ? preferred : frames[0];
   elements.cartesianFrame.value = cartesianFrame;
+  refreshEnhancedSelect(elements.cartesianFrame);
 }
 function renderCartesianValues(): void {
   if (!cartesianFrame) {
-    renderPlaceholder(elements.cartesianValues, "no frame");
+    renderPlaceholder(elements.cartesianValues, t(currentLanguage, "state.noFrame"));
     return;
   }
 
   const transform = sceneManager.getRelativeTransform(cartesianFrame);
   if (!transform) {
-    renderPlaceholder(elements.cartesianValues, "unavailable");
+    renderPlaceholder(elements.cartesianValues, t(currentLanguage, "state.unavailable"));
     return;
   }
 
@@ -758,10 +1123,10 @@ function buildTfTreeLines(snapshot: Array<{ parent: string; child: string }>): s
   const formatLabel = (frame: string): string => {
     let label = frame;
     if (frame === fixedFrame) {
-      label += " [fixed]";
+      label += ` [${t(currentLanguage, "tf.fixed")}]`;
     }
     if (frame === selectedFrame) {
-      label += " [selected]";
+      label += ` [${t(currentLanguage, "tf.selected")}]`;
     }
     return label;
   };
@@ -774,7 +1139,7 @@ function buildTfTreeLines(snapshot: Array<{ parent: string; child: string }>): s
     lines.push(`${"  ".repeat(depth)}${formatLabel(node)}`);
 
     if (stack.has(node)) {
-      lines.push(`${"  ".repeat(depth + 1)}(loop)`);
+      lines.push(`${"  ".repeat(depth + 1)}(${t(currentLanguage, "tf.loop")})`);
       return;
     }
 
@@ -889,7 +1254,7 @@ function renderTfTree(): void {
   const snapshot = sceneManager.getTfSnapshot();
   const lines = buildTfTreeLines(snapshot);
   if (lines.length === 0) {
-    elements.tfTree.textContent = "no tf data";
+    elements.tfTree.textContent = t(currentLanguage, "state.noTfData");
     return;
   }
 
@@ -917,7 +1282,7 @@ function updateTrajectoryUi(): void {
   const progress = durationMs > 0 ? Math.min(100, Math.max(0, Math.round((progressMs / durationMs) * 100))) : 0;
   elements.trajProgress.value = String(progress);
 
-  elements.trajTime.textContent = `${(durationMs / 1000).toFixed(1)}s`;
+  elements.trajTime.textContent = (durationMs / 1000).toFixed(1) + t(currentLanguage, "unit.seconds");
 
   const canPlay = trajectory.length > 0;
   elements.trajPlayBtn.disabled = !canPlay;
@@ -927,6 +1292,16 @@ function updateTrajectoryUi(): void {
   elements.trajRecordBtn.innerHTML = isRecording ? TRAJ_ICON_STOP : TRAJ_ICON_RECORD;
   elements.trajPlayBtn.innerHTML = isPlaying ? TRAJ_ICON_PAUSE : TRAJ_ICON_PLAY;
   elements.trajClearBtn.innerHTML = TRAJ_ICON_CLEAR;
+
+  const recordLabel = isRecording ? t(currentLanguage, "button.stop") : t(currentLanguage, "button.record");
+  const playLabel = isPlaying ? t(currentLanguage, "button.pause") : t(currentLanguage, "button.play");
+  const clearLabel = t(currentLanguage, "button.clear");
+  elements.trajRecordBtn.title = recordLabel;
+  elements.trajRecordBtn.setAttribute("aria-label", recordLabel);
+  elements.trajPlayBtn.title = playLabel;
+  elements.trajPlayBtn.setAttribute("aria-label", playLabel);
+  elements.trajClearBtn.title = clearLabel;
+  elements.trajClearBtn.setAttribute("aria-label", clearLabel);
 
   elements.cartesianFrame.disabled = isPlaying;
 }
@@ -1242,6 +1617,10 @@ function clearSubscriptions(): void {
   unsubscribe(subscriptions.tf);
   unsubscribe(subscriptions.tfStatic);
   unsubscribe(subscriptions.pointCloud);
+  unsubscribe(subscriptions.moveGroupGoal);
+  unsubscribe(subscriptions.moveGroupResult);
+  unsubscribe(subscriptions.executeTrajectoryGoal);
+  unsubscribe(subscriptions.executeTrajectoryResult);
   subscriptions = {};
 }
 
@@ -1283,6 +1662,7 @@ function updatePointCloudOptions(availableTopics: string[], preferredTopic?: str
 
   const selected = preferredTopic || config.defaultPointCloudTopic;
   elements.pointCloudTopic.value = selected;
+  refreshEnhancedSelect(elements.pointCloudTopic);
 }
 
 async function refreshTopicCache(): Promise<void> {
@@ -1290,6 +1670,7 @@ async function refreshTopicCache(): Promise<void> {
   const cloudTopics = pointCloudTopicNames(topics);
   updatePointCloudOptions(cloudTopics, elements.pointCloudTopic.value || config.defaultPointCloudTopic);
   renderRosInfoPanel();
+  subscribeMoveItTopics();
   log(`topic discovery finished: ${topics.length} topics, ${cloudTopics.length} pointcloud topics`);
 }
 
@@ -1450,9 +1831,15 @@ async function syncFromRviz(): Promise<void> {
   log(`sync applied: fixed_frame=${config.fixedFrame}, pointcloud=${desiredTopic}`);
 }
 
+applyTheme(currentTheme);
+sceneManager.setTheme(currentTheme);
 renderConfigToUi();
 updatePointCloudOptions([], config.defaultPointCloudTopic);
-updateStatusLabel("disconnected");
+enhanceSelect(elements.pointCloudTopic);
+enhanceSelect(elements.jointAngleUnit);
+enhanceSelect(elements.cartesianFrame);
+enhanceSelect(elements.cartesianLengthUnit);
+enhanceSelect(elements.cartesianAngleUnit);
 jointAngleUnit = elements.jointAngleUnit.value as AngleUnit;
 cartesianLengthUnit = elements.cartesianLengthUnit.value as LengthUnit;
 cartesianAngleUnit = elements.cartesianAngleUnit.value as AngleUnit;
@@ -1460,12 +1847,27 @@ setSidebarCollapsed(sidebarCollapsed);
 setRightSidebarCollapsed(rightSidebarCollapsed);
 setRightPanelTab("robot");
 clearRosInfoState();
-renderRightPanel();
-updateTrajectoryUi();
+refreshUiText();
 
 rosClient.onStateChange((state, detail) => {
+  lastConnectionState = state;
+  lastConnectionDetail = detail;
   updateStatusLabel(state, detail);
-  elements.connectBtn.textContent = state === "connected" ? "Disconnect" : "Connect";
+  updateConnectButtonText();
+});
+
+elements.languageToggleBtn.addEventListener("click", () => {
+  currentLanguage = currentLanguage === "en" ? "zh" : "en";
+  saveLanguage(currentLanguage);
+  refreshUiText();
+});
+
+elements.themeToggleBtn.addEventListener("click", () => {
+  currentTheme = currentTheme === "dark" ? "light" : "dark";
+  saveTheme(currentTheme);
+  applyTheme(currentTheme);
+  sceneManager.setTheme(currentTheme);
+  updateThemeToggleUi();
 });
 
 elements.connectBtn.addEventListener("click", async () => {
@@ -1647,7 +2049,9 @@ window.addEventListener("beforeunload", () => {
   sceneManager.dispose();
 });
 
-log("WebRviz ready. Click Connect to start.");
+log(t(currentLanguage, "log.ready"));
+
+
 
 
 
