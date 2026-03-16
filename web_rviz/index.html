@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -84,8 +84,8 @@
           </section>
 
           <section class="panel-section">
-            <h3 data-i18n="section.cartesian">Cartesian</h3>
-            <label for="cartesianFrame" data-i18n="label.frame">Frame</label>
+            <h3 data-i18n="section.cartesian">Cartesian Position</h3>
+            <label for="cartesianFrame" data-i18n="label.frame">TCP link</label>
             <select id="cartesianFrame"></select>
             <div class="row row-compact">
               <select id="cartesianLengthUnit">
@@ -100,8 +100,13 @@
             <div id="cartesianValues" class="data-list"></div>
           </section>
 
-          <section class="panel-section">
+          <section class="panel-section tf-tree-section">
             <h3 data-i18n="section.tfTree">TF Tree</h3>
+            <div class="tf-toolbar">
+              <button id="tfToggleAllBtn" type="button"></button>
+              <button id="tfSelectBtn" type="button"></button>
+            </div>
+            <div id="tfFilterMenu" class="tf-filter-menu" hidden></div>
             <pre id="tfTree"></pre>
           </section>
         </div>
@@ -142,3 +147,4 @@
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
+
