@@ -5,7 +5,7 @@ import { decodePointCloud2 } from "./ros/pointcloud";
 import { ConnectionState, MessageDetailsResponse, MessageTypeDef, RosClient, ServiceInfo, TopicInfo } from "./ros/rosClient";
 import { loadRvizSyncHints } from "./rviz/rvizConfig";
 import { loadRobotModel } from "./visualization/robotLoader";
-import { SceneManager } from "./visualization/sceneManager";
+import { RobotJointConnection, RobotJointDetail, RobotLinkDetail, SceneManager } from "./visualization/sceneManager";
 import { applyStaticTranslations, applyTheme, Language, loadLanguage, loadTheme, saveLanguage, saveTheme, t, ThemeMode } from "./uiSettings";
 import { enhanceSelect, refreshEnhancedSelect } from "./customSelect";
 
@@ -96,6 +96,22 @@ interface PlannedTrajectoryPayload {
   source: "result" | "display";
   targetFrame: string;
   restoreState?: PlannedTrajectoryRestoreState;
+}
+
+
+interface TfTreeGraph {
+  roots: string[];
+  childrenByParent: Map<string, string[]>;
+}
+
+interface DetailField {
+  label: string;
+  value: string;
+}
+
+interface DetailSection {
+  title: string;
+  fields: DetailField[];
 }
 
 const POINTCLOUD2_TYPE = "sensor_msgs/PointCloud2";
@@ -199,6 +215,7 @@ let lastNonSelectionTfVisibilityMode: Exclude<TfVisibilityMode, "selection"> = "
 let selectedTfFrames = new Set<string>();
 let tfFilterMenuOpen = false;
 let pendingRightPanelUpdate = false;
+let lastTfTreeRenderSignature = "";
 let trajectory: TrajectoryFrame[] = [];
 let isRecording = false;
 let isPlaying = false;
@@ -986,16 +1003,36 @@ function setRightPanelTab(tab: RightPanelTab): void {
   renderRightPanel();
 }
 
-function showDetailModal(text: string): void {
-  elements.detailModalContent.classList.remove("param-detail-content");
-  elements.detailModalContent.textContent = text;
+function openDetailModalContent(content: string | Node, contentClass?: string): void {
+  elements.detailModalContent.classList.remove("param-detail-content", "structured-detail-content");
+  clearElement(elements.detailModalContent);
+
+  if (contentClass) {
+    elements.detailModalContent.classList.add(contentClass);
+  }
+
+  if (typeof content === "string") {
+    elements.detailModalContent.textContent = content;
+  } else {
+    elements.detailModalContent.appendChild(content);
+  }
+
   elements.detailModal.classList.add("active");
   elements.detailModal.setAttribute("aria-hidden", "false");
 }
 
+function showDetailModal(text: string): void {
+  openDetailModalContent(text);
+}
+
+function showStructuredDetailModal(content: Node): void {
+  openDetailModalContent(content, "structured-detail-content");
+}
+
 function showParamDetailModal(paramName: string, value: string): void {
+  elements.detailModalContent.classList.remove("structured-detail-content");
   elements.detailModalContent.classList.add("param-detail-content");
-  elements.detailModalContent.textContent = "";
+  clearElement(elements.detailModalContent);
 
   const labelText = document.createTextNode(t(currentLanguage, "detail.paramValueLabel", { paramName }));
   elements.detailModalContent.appendChild(labelText);
@@ -1013,6 +1050,287 @@ function showParamDetailModal(paramName: string, value: string): void {
 function hideDetailModal(): void {
   elements.detailModal.classList.remove("active");
   elements.detailModal.setAttribute("aria-hidden", "true");
+}
+
+function detailText(zh: string, en: string): string {
+  return currentLanguage === "zh" ? zh : en;
+}
+
+function detailFallback(value?: string | null): string {
+  const text = (value || "").trim();
+  return text ? text : detailText("\u65e0", "None");
+}
+
+function formatDetailList(values: string[]): string {
+  return values.length > 0 ? values.join(", ") : detailText("\u65e0", "None");
+}
+
+function formatDetailVector(values: [number, number, number] | null, unit = ""): string {
+  if (!values) {
+    return detailText("\u65e0", "None");
+  }
+  const joined = values.map((value) => formatNumber(value)).join(", ");
+  return unit ? joined + " " + unit : joined;
+}
+
+function formatDetailAngles(values: [number, number, number] | null): string {
+  if (!values) {
+    return detailText("\u65e0", "None");
+  }
+  return values.map((value) => formatNumber(convertAngleFromRad(value, "deg"), 1)).join(", ") + " deg";
+}
+
+function formatDetailMeters(value: number | null, digits = 4, unit = "m"): string {
+  if (value == null || !Number.isFinite(value)) {
+    return detailText("\u65e0", "None");
+  }
+  return formatNumber(value, digits) + " " + unit;
+}
+
+function formatDetailRadians(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) {
+    return detailText("\u65e0", "None");
+  }
+  return formatNumber(value, 3) + " rad / " + formatNumber(convertAngleFromRad(value, "deg"), 1) + " deg";
+}
+
+function formatJointLimitValue(value: number | null, jointType: string): string {
+  if (jointType === "revolute" || jointType === "continuous") {
+    return formatDetailRadians(value);
+  }
+  if (jointType === "prismatic") {
+    return formatDetailMeters(value, 4, "m");
+  }
+  if (value == null || !Number.isFinite(value)) {
+    return detailText("\u65e0", "None");
+  }
+  return formatNumber(value);
+}
+
+function formatJointCurrentValue(detail: RobotJointDetail): string {
+  if (detail.currentValue.length === 0) {
+    return detailText("\u56fa\u5b9a / \u65e0\u81ea\u7531\u5ea6", "Fixed / no DoF");
+  }
+
+  if (detail.type === "revolute" || detail.type === "continuous") {
+    return formatDetailRadians(detail.currentValue[0] ?? null);
+  }
+
+  if (detail.type === "prismatic") {
+    return formatDetailMeters(detail.currentValue[0] ?? null, 4, "m");
+  }
+
+  return detail.currentValue.map((value) => formatNumber(value)).join(", ");
+}
+
+function createStructuredDetailContent(kicker: string, title: string, sections: DetailSection[]): HTMLDivElement {
+  const root = document.createElement("div");
+  root.className = "structured-detail";
+
+  const header = document.createElement("div");
+  header.className = "structured-detail-header";
+
+  const kickerElement = document.createElement("div");
+  kickerElement.className = "structured-detail-kicker";
+  kickerElement.textContent = kicker;
+  header.appendChild(kickerElement);
+
+  const titleElement = document.createElement("div");
+  titleElement.className = "structured-detail-title";
+  titleElement.textContent = title;
+  header.appendChild(titleElement);
+
+  root.appendChild(header);
+
+  const sectionList = document.createElement("div");
+  sectionList.className = "structured-detail-sections";
+
+  for (const section of sections) {
+    if (section.fields.length === 0) {
+      continue;
+    }
+
+    const card = document.createElement("section");
+    card.className = "structured-detail-card";
+
+    const sectionTitle = document.createElement("h4");
+    sectionTitle.className = "structured-detail-section-title";
+    sectionTitle.textContent = section.title;
+    card.appendChild(sectionTitle);
+
+    const grid = document.createElement("div");
+    grid.className = "structured-detail-grid";
+
+    for (const field of section.fields) {
+      const label = document.createElement("div");
+      label.className = "structured-detail-label";
+      label.textContent = field.label;
+      grid.appendChild(label);
+
+      const value = document.createElement("div");
+      value.className = "structured-detail-value";
+      value.textContent = field.value;
+      grid.appendChild(value);
+    }
+
+    card.appendChild(grid);
+    sectionList.appendChild(card);
+  }
+
+  root.appendChild(sectionList);
+  return root;
+}
+
+function buildLinkDetailSections(detail: RobotLinkDetail): DetailSection[] {
+  const sections: DetailSection[] = [
+    {
+      title: detailText("\u6982\u89c8", "Overview"),
+      fields: [
+        { label: detailText("\u540d\u79f0", "Name"), value: detail.name },
+        { label: detailText("\u7236\u5173\u8282", "Parent joint"), value: detailFallback(detail.parentJoint) },
+        { label: detailText("\u5b50\u5173\u8282", "Child joints"), value: formatDetailList(detail.childJoints) }
+      ]
+    },
+    {
+      title: detailText("\u51e0\u4f55\u4fe1\u606f", "Geometry"),
+      fields: [
+        { label: detailText("\u53ef\u89c6\u4f53\u6570\u91cf", "Visual count"), value: String(detail.visualCount) },
+        { label: detailText("\u78b0\u649e\u4f53\u6570\u91cf", "Collision count"), value: String(detail.collisionCount) },
+        { label: detailText("\u6750\u8d28", "Materials"), value: formatDetailList(detail.materialNames) }
+      ]
+    }
+  ];
+
+  if (detail.pose) {
+    sections.push({
+      title: detailText("\u5f53\u524d\u4f4d\u59ff", "Current pose"),
+      fields: [
+        { label: detailText("\u4f4d\u7f6e xyz", "Position xyz"), value: formatDetailVector(detail.pose.xyz, "m") },
+        { label: detailText("\u59ff\u6001 rpy", "Orientation rpy"), value: formatDetailAngles(detail.pose.rpy) }
+      ]
+    });
+  }
+
+  if (detail.mass !== null || detail.inertialOrigin || detail.inertia) {
+    sections.push({
+      title: detailText("\u60ef\u6027\u4fe1\u606f", "Inertial"),
+      fields: [
+        { label: detailText("\u8d28\u91cf", "Mass"), value: formatDetailMeters(detail.mass, 4, "kg") },
+        { label: detailText("\u8d28\u5fc3 xyz", "COM xyz"), value: detail.inertialOrigin ? formatDetailVector(detail.inertialOrigin.xyz, "m") : detailText("\u65e0", "None") },
+        { label: detailText("\u8d28\u5fc3 rpy", "COM rpy"), value: detail.inertialOrigin ? formatDetailAngles(detail.inertialOrigin.rpy) : detailText("\u65e0", "None") },
+        { label: "Ixx / Iyy / Izz", value: detail.inertia ? [detail.inertia.ixx, detail.inertia.iyy, detail.inertia.izz].map((value) => value == null ? "--" : formatNumber(value, 4)).join(" / ") : detailText("\u65e0", "None") },
+        { label: "Ixy / Ixz / Iyz", value: detail.inertia ? [detail.inertia.ixy, detail.inertia.ixz, detail.inertia.iyz].map((value) => value == null ? "--" : formatNumber(value, 4)).join(" / ") : detailText("\u65e0", "None") }
+      ]
+    });
+  }
+
+  return sections;
+}
+
+function buildJointDetailSections(detail: RobotJointDetail): DetailSection[] {
+  const sections: DetailSection[] = [
+    {
+      title: detailText("\u6982\u89c8", "Overview"),
+      fields: [
+        { label: detailText("\u540d\u79f0", "Name"), value: detail.name },
+        { label: detailText("\u7c7b\u578b", "Type"), value: detailFallback(detail.type) },
+        { label: detailText("\u7236 Link", "Parent link"), value: detailFallback(detail.parentLink) },
+        { label: detailText("\u5b50 Link", "Child link"), value: detailFallback(detail.childLink) }
+      ]
+    },
+    {
+      title: detailText("\u8fd0\u52a8\u4fe1\u606f", "Motion"),
+      fields: [
+        { label: detailText("\u5f53\u524d\u503c", "Current value"), value: formatJointCurrentValue(detail) },
+        { label: detailText("\u8f74\u5411", "Axis"), value: formatDetailVector(detail.axis) },
+        { label: detailText("\u539f\u70b9 xyz", "Origin xyz"), value: detail.origin ? formatDetailVector(detail.origin.xyz, "m") : detailText("\u65e0", "None") },
+        { label: detailText("\u539f\u70b9 rpy", "Origin rpy"), value: detail.origin ? formatDetailAngles(detail.origin.rpy) : detailText("\u65e0", "None") }
+      ]
+    }
+  ];
+
+  if (detail.limit) {
+    sections.push({
+      title: detailText("\u9650\u4f4d\u53c2\u6570", "Limits"),
+      fields: [
+        { label: detailText("\u4e0b\u9650", "Lower"), value: formatJointLimitValue(detail.limit.lower, detail.type) },
+        { label: detailText("\u4e0a\u9650", "Upper"), value: formatJointLimitValue(detail.limit.upper, detail.type) },
+        { label: detailText("\u529b/\u529b\u77e9", "Effort"), value: detail.limit.effort == null ? detailText("\u65e0", "None") : formatNumber(detail.limit.effort, 3) },
+        { label: detailText("\u901f\u5ea6", "Velocity"), value: detail.limit.velocity == null ? detailText("\u65e0", "None") : formatNumber(detail.limit.velocity, 3) }
+      ]
+    });
+  }
+
+  if (detail.dynamics || detail.mimic) {
+    sections.push({
+      title: detailText("\u9644\u52a0\u4fe1\u606f", "Additional"),
+      fields: [
+        { label: detailText("\u963b\u5c3c", "Damping"), value: detail.dynamics?.damping == null ? detailText("\u65e0", "None") : formatNumber(detail.dynamics.damping, 4) },
+        { label: detailText("\u6469\u64e6", "Friction"), value: detail.dynamics?.friction == null ? detailText("\u65e0", "None") : formatNumber(detail.dynamics.friction, 4) },
+        { label: detailText("\u4ece\u52a8\u5173\u8282", "Mimic joint"), value: detail.mimic ? detailFallback(detail.mimic.joint) : detailText("\u65e0", "None") },
+        { label: detailText("\u4ece\u52a8\u53c2\u6570", "Mimic params"), value: detail.mimic ? "multiplier=" + (detail.mimic.multiplier == null ? "--" : formatNumber(detail.mimic.multiplier, 3)) + ", offset=" + (detail.mimic.offset == null ? "--" : formatNumber(detail.mimic.offset, 3)) : detailText("\u65e0", "None") }
+      ]
+    });
+  }
+
+  return sections;
+}
+
+function showLinkDetailModal(linkName: string): void {
+  const detail = sceneManager.getRobotLinkDetail(linkName);
+  if (!detail) {
+    const snapshot = sceneManager.getTfSnapshot();
+    const parent = snapshot.find((edge) => edge.child === linkName)?.parent ?? null;
+    const children = snapshot.filter((edge) => edge.parent === linkName).map((edge) => edge.child).sort((left, right) => left.localeCompare(right));
+    const transform = sceneManager.getRelativeTransform(linkName);
+    const euler = transform ? quatToEuler(transform.rotation) : null;
+    const sections: DetailSection[] = [
+      {
+        title: detailText("\u6982\u89c8", "Overview"),
+        fields: [
+          { label: detailText("\u540d\u79f0", "Name"), value: linkName },
+          { label: detailText("\u7236\u5750\u6807\u7cfb", "Parent frame"), value: detailFallback(parent) },
+          { label: detailText("\u5b50\u5750\u6807\u7cfb", "Child frames"), value: formatDetailList(children) }
+        ]
+      }
+    ];
+    if (transform && euler) {
+      sections.push({
+        title: detailText("\u5f53\u524d\u4f4d\u59ff", "Current pose"),
+        fields: [
+          { label: detailText("\u4f4d\u7f6e xyz", "Position xyz"), value: formatDetailVector([transform.translation.x, transform.translation.y, transform.translation.z], "m") },
+          { label: detailText("\u59ff\u6001 rpy", "Orientation rpy"), value: formatDetailAngles([euler.roll, euler.pitch, euler.yaw]) }
+        ]
+      });
+    }
+    showStructuredDetailModal(createStructuredDetailContent(detailText("\u5750\u6807\u7cfb\u8be6\u60c5", "Frame Detail"), linkName, sections));
+    return;
+  }
+
+  showStructuredDetailModal(createStructuredDetailContent(detailText("Link \u8be6\u60c5", "Link Detail"), detail.name, buildLinkDetailSections(detail)));
+}
+
+function showJointDetailModal(jointName: string): void {
+  const detail = sceneManager.getRobotJointDetail(jointName);
+  if (!detail) {
+    return;
+  }
+
+  showStructuredDetailModal(createStructuredDetailContent(detailText("\u5173\u8282\u8be6\u60c5", "Joint Detail"), detail.name, buildJointDetailSections(detail)));
+}
+
+function makeTfTreeRowInteractive(row: HTMLDivElement, onActivate: () => void): HTMLDivElement {
+  row.classList.add("tf-tree-row-clickable");
+  row.tabIndex = 0;
+  row.setAttribute("role", "button");
+  row.addEventListener("click", onActivate);
+  row.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onActivate();
+    }
+  });
+  return row;
 }
 
 function formatUnknownValue(value: unknown): string {
@@ -1441,13 +1759,13 @@ function renderCartesianValues(): void {
   addDataRow(elements.cartesianValues, `Yaw (${angleUnit})`, formatNumber(convertAngleFromRad(euler.yaw, cartesianAngleUnit)));
 }
 
-function buildTfTreeLines(snapshot: Array<{ parent: string; child: string }>, visibleNodes: Set<string> | null = null): string[] {
+function buildTfTreeGraph(snapshot: Array<{ parent: string; child: string }>, visibleNodes: Set<string> | null = null): TfTreeGraph | null {
   if (snapshot.length === 0) {
-    return [];
+    return null;
   }
 
   if (visibleNodes && visibleNodes.size === 0) {
-    return [];
+    return null;
   }
 
   const childrenByParent = new Map<string, string[]>();
@@ -1474,7 +1792,7 @@ function buildTfTreeLines(snapshot: Array<{ parent: string; child: string }>, vi
   }
 
   if (nodes.size === 0) {
-    return [];
+    return null;
   }
 
   for (const [parent, children] of childrenByParent.entries()) {
@@ -1488,64 +1806,41 @@ function buildTfTreeLines(snapshot: Array<{ parent: string; child: string }>, vi
   }
   roots.sort((left, right) => left.localeCompare(right));
 
-  const fixedFrame = sceneManager.getFixedFrame();
-  const selectedFrame = cartesianFrame;
-  const lines: string[] = [];
-  const stack = new Set<string>();
-  const maxLines = 400;
-
-  const formatLabel = (frame: string): string => {
-    let label = frame;
-    if (frame === fixedFrame) {
-      label += ` [${t(currentLanguage, "tf.fixed")}]`;
-    }
-    if (frame === selectedFrame) {
-      label += ` [${t(currentLanguage, "tf.selected")}]`;
-    }
-    return label;
-  };
-
-  const renderNode = (node: string, depth: number): void => {
-    if (lines.length >= maxLines) {
-      return;
-    }
-
-    lines.push(`${"  ".repeat(depth)}${formatLabel(node)}`);
-
-    if (stack.has(node)) {
-      lines.push(`${"  ".repeat(depth + 1)}(${t(currentLanguage, "tf.loop")})`);
-      return;
-    }
-
-    const children = childrenByParent.get(node);
-    if (!children || children.length === 0) {
-      return;
-    }
-
-    stack.add(node);
-    for (const child of children) {
-      if (lines.length >= maxLines) {
-        break;
-      }
-      renderNode(child, depth + 1);
-    }
-    stack.delete(node);
-  };
-
-  for (const root of roots) {
-    if (lines.length >= maxLines) {
-      break;
-    }
-    renderNode(root, 0);
-  }
-
-  if (lines.length >= maxLines) {
-    lines.push("...");
-  }
-
-  return lines;
+  return { roots, childrenByParent };
 }
 
+function buildTfJointLookup(connections: RobotJointConnection[] = sceneManager.getRobotJointConnections()): Map<string, RobotJointConnection> {
+  const lookup = new Map<string, RobotJointConnection>();
+  for (const joint of connections) {
+    lookup.set(joint.parent + "::" + joint.child, joint);
+  }
+  return lookup;
+}
+
+function createTfTreeRow(
+  kind: "frame" | "joint" | "note",
+  label: string,
+  depth: number,
+  badges: string[] = []
+): HTMLDivElement {
+  const row = document.createElement("div");
+  row.className = "tf-tree-row tf-tree-row-" + kind;
+  row.style.paddingLeft = String(depth * 10) + "px";
+
+  const name = document.createElement("span");
+  name.className = "tf-tree-name";
+  name.textContent = label;
+  row.appendChild(name);
+
+  for (const badgeText of badges) {
+    const badge = document.createElement("span");
+    badge.className = "tf-tree-badge";
+    badge.textContent = "[" + badgeText + "]";
+    row.appendChild(badge);
+  }
+
+  return row;
+}
 function getTfTreeOrder(snapshot: Array<{ parent: string; child: string }>): string[] {
   if (snapshot.length === 0) {
     return [];
@@ -1734,6 +2029,25 @@ function applyTfVisualizationFilter(snapshot: Array<{ parent: string; child: str
   sceneManager.setVisibleTfFrames(getVisibleTfNodes(snapshot));
 }
 
+function getTfTreeStructureSignature(snapshot: Array<{ parent: string; child: string }>, joints: RobotJointConnection[]): string {
+  const edgeSignature = [...snapshot]
+    .map((edge) => edge.parent + ">" + edge.child)
+    .sort((left, right) => left.localeCompare(right))
+    .join("|");
+  const jointSignature = joints
+    .map((joint) => joint.parent + ">" + joint.name + ">" + joint.child + ">" + joint.type)
+    .sort((left, right) => left.localeCompare(right))
+    .join("|");
+
+  return [
+    currentLanguage,
+    sceneManager.getFixedFrame(),
+    cartesianFrame,
+    edgeSignature,
+    jointSignature
+  ].join("||");
+}
+
 function renderTfTree(): void {
   const snapshot = sceneManager.getTfSnapshot();
   const availableFrames = getTfTreeOrder(snapshot);
@@ -1742,15 +2056,100 @@ function renderTfTree(): void {
   updateTfToolbarUi(availableFrames);
   renderTfFilterMenu(availableFrames);
 
-  const lines = buildTfTreeLines(snapshot, null);
-  if (lines.length === 0) {
+  const graph = buildTfTreeGraph(snapshot, null);
+  const jointConnections = sceneManager.getRobotJointConnections();
+  const renderSignature = graph
+    ? getTfTreeStructureSignature(snapshot, jointConnections)
+    : ["empty", currentLanguage, sceneManager.getFixedFrame(), cartesianFrame].join("||");
+
+  if (renderSignature === lastTfTreeRenderSignature) {
+    return;
+  }
+
+  lastTfTreeRenderSignature = renderSignature;
+  clearElement(elements.tfTree);
+
+  if (!graph) {
     elements.tfTree.textContent = t(currentLanguage, "state.noTfData");
     return;
   }
 
-  elements.tfTree.textContent = lines.join("\n");
-}
+  const fixedFrame = sceneManager.getFixedFrame();
+  const selectedFrame = cartesianFrame;
+  const jointLookup = buildTfJointLookup(jointConnections);
+  const content = document.createElement("div");
+  content.className = "tf-tree-content";
+  elements.tfTree.appendChild(content);
 
+  const stack = new Set<string>();
+  let rowCount = 0;
+  const maxRows = 600;
+
+  const appendFrame = (frame: string, depth: number): void => {
+    if (rowCount >= maxRows) {
+      return;
+    }
+
+    const badges: string[] = [];
+    if (frame === fixedFrame) {
+      badges.push(t(currentLanguage, "tf.fixed"));
+    }
+    if (frame === selectedFrame) {
+      badges.push(t(currentLanguage, "tf.selected"));
+    }
+    const frameRow = makeTfTreeRowInteractive(createTfTreeRow("frame", frame, depth, badges), () => {
+      showLinkDetailModal(frame);
+    });
+    content.appendChild(frameRow);
+    rowCount += 1;
+
+    if (stack.has(frame)) {
+      if (rowCount < maxRows) {
+        content.appendChild(createTfTreeRow("note", "(" + t(currentLanguage, "tf.loop") + ")", depth + 1));
+        rowCount += 1;
+      }
+      return;
+    }
+
+    const children = graph.childrenByParent.get(frame);
+    if (!children || children.length === 0) {
+      return;
+    }
+
+    stack.add(frame);
+    for (const child of children) {
+      if (rowCount >= maxRows) {
+        break;
+      }
+
+      const joint = jointLookup.get(frame + "::" + child);
+      if (joint) {
+        const jointRow = makeTfTreeRowInteractive(createTfTreeRow("joint", joint.name, depth + 1), () => {
+          showJointDetailModal(joint.name);
+        });
+        content.appendChild(jointRow);
+        rowCount += 1;
+        if (rowCount >= maxRows) {
+          break;
+        }
+      }
+
+      appendFrame(child, depth + (joint ? 2 : 1));
+    }
+    stack.delete(frame);
+  };
+
+  for (const root of graph.roots) {
+    if (rowCount >= maxRows) {
+      break;
+    }
+    appendFrame(root, 0);
+  }
+
+  if (rowCount >= maxRows) {
+    content.appendChild(createTfTreeRow("note", "...", 0));
+  }
+}
 function getTrajectoryDurationMs(): number {
   if (trajectory.length === 0) {
     return 0;
@@ -2087,6 +2486,7 @@ function scheduleRightPanelUpdate(): void {
 function clearRightPanelState(): void {
   jointState = [];
   cartesianFrame = "";
+  lastTfTreeRenderSignature = "";
   lastFrameOptions = [];
   elements.cartesianFrame.innerHTML = "";
   clearRosInfoState();

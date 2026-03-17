@@ -5,6 +5,7 @@
   BufferGeometry,
   Color,
   DirectionalLight,
+  Euler,
   EdgesGeometry,
   GridHelper,
   Group,
@@ -51,6 +52,72 @@ export interface TfNode {
   translation: Vector3;
   rotation: Quaternion;
 }
+
+export interface RobotJointConnection {
+  name: string;
+  parent: string;
+  child: string;
+  type: string;
+}
+
+export interface RobotTransformDetail {
+  xyz: [number, number, number];
+  rpy: [number, number, number];
+}
+
+export interface RobotInertiaDetail {
+  ixx: number | null;
+  ixy: number | null;
+  ixz: number | null;
+  iyy: number | null;
+  iyz: number | null;
+  izz: number | null;
+}
+
+export interface RobotLinkDetail {
+  name: string;
+  parentJoint: string | null;
+  childJoints: string[];
+  visualCount: number;
+  collisionCount: number;
+  materialNames: string[];
+  mass: number | null;
+  inertialOrigin: RobotTransformDetail | null;
+  inertia: RobotInertiaDetail | null;
+  pose: RobotTransformDetail | null;
+}
+
+export interface RobotJointLimitDetail {
+  lower: number | null;
+  upper: number | null;
+  effort: number | null;
+  velocity: number | null;
+}
+
+export interface RobotJointDynamicsDetail {
+  damping: number | null;
+  friction: number | null;
+}
+
+export interface RobotJointMimicDetail {
+  joint: string;
+  multiplier: number | null;
+  offset: number | null;
+}
+
+export interface RobotJointDetail {
+  name: string;
+  type: string;
+  parentLink: string | null;
+  childLink: string | null;
+  axis: [number, number, number] | null;
+  origin: RobotTransformDetail | null;
+  limit: RobotJointLimitDetail | null;
+  dynamics: RobotJointDynamicsDetail | null;
+  mimic: RobotJointMimicDetail | null;
+  currentValue: number[];
+}
+
 
 export class SceneManager {
   private readonly container: HTMLElement;
@@ -320,6 +387,226 @@ export class SceneManager {
       snapshot.push({ parent: record.parent, child });
     }
     return snapshot;
+  }
+
+  getRobotJointConnections(): RobotJointConnection[] {
+    if (!this.robot || !this.robot.joints) {
+      return [];
+    }
+
+    const connections: RobotJointConnection[] = [];
+    for (const [jointKey, joint] of Object.entries<any>(this.robot.joints)) {
+      const parentName = typeof joint?.parent?.urdfName === "string" ? joint.parent.urdfName : "";
+      const childName = this.getJointChildLinkName(joint) || "";
+
+      if (!parentName || !childName) {
+        continue;
+      }
+
+      connections.push({
+        name: typeof joint?.urdfName === "string" && joint.urdfName ? joint.urdfName : jointKey,
+        parent: parentName,
+        child: childName,
+        type: typeof joint?.jointType === "string" ? joint.jointType : ""
+      });
+    }
+
+    connections.sort((left, right) => {
+      const parentCompare = left.parent.localeCompare(right.parent);
+      if (parentCompare !== 0) {
+        return parentCompare;
+      }
+      const childCompare = left.child.localeCompare(right.child);
+      if (childCompare !== 0) {
+        return childCompare;
+      }
+      return left.name.localeCompare(right.name);
+    });
+
+    return connections;
+  }
+
+  getRobotLinkDetail(linkName: string): RobotLinkDetail | null {
+    if (!this.robot || !this.robot.links || !linkName) {
+      return null;
+    }
+
+    const link = this.robot.links[linkName];
+    if (!link) {
+      return null;
+    }
+
+    let parentJoint: string | null = null;
+    const childJoints: string[] = [];
+    for (const [jointKey, joint] of Object.entries<any>(this.robot.joints || {})) {
+      const jointName = typeof joint?.urdfName === "string" && joint.urdfName ? joint.urdfName : jointKey;
+      const parentLinkName = typeof joint?.parent?.urdfName === "string" ? joint.parent.urdfName : "";
+      const childLinkName = this.getJointChildLinkName(joint);
+      if (childLinkName === linkName && !parentJoint) {
+        parentJoint = jointName;
+      }
+      if (parentLinkName === linkName) {
+        childJoints.push(jointName);
+      }
+    }
+    childJoints.sort((left, right) => left.localeCompare(right));
+
+    const linkNode = link.urdfNode as Element | null;
+    const childNodes = linkNode ? Array.from(linkNode.children) : [];
+    const visualNodes = childNodes.filter((node) => node.nodeName.toLowerCase() === "visual");
+    const collisionNodes = childNodes.filter((node) => node.nodeName.toLowerCase() === "collision");
+    const materialNames = Array.from(new Set(
+      visualNodes
+        .map((node) => Array.from(node.children).find((child) => child.nodeName.toLowerCase() === "material")?.getAttribute("name") || "")
+        .filter((name) => !!name)
+    )).sort((left, right) => left.localeCompare(right));
+
+    let mass: number | null = null;
+    let inertialOrigin: RobotTransformDetail | null = null;
+    let inertia: RobotInertiaDetail | null = null;
+    const inertialNode = childNodes.find((node) => node.nodeName.toLowerCase() === "inertial") || null;
+    if (inertialNode) {
+      const inertialChildren = Array.from(inertialNode.children);
+      const massNode = inertialChildren.find((node) => node.nodeName.toLowerCase() === "mass") || null;
+      const originNode = inertialChildren.find((node) => node.nodeName.toLowerCase() === "origin") || null;
+      const inertiaNode = inertialChildren.find((node) => node.nodeName.toLowerCase() === "inertia") || null;
+      mass = this.parseNumberAttribute(massNode, "value");
+      inertialOrigin = this.parseOriginElement(originNode) || { xyz: [0, 0, 0], rpy: [0, 0, 0] };
+      if (inertiaNode) {
+        inertia = {
+          ixx: this.parseNumberAttribute(inertiaNode, "ixx"),
+          ixy: this.parseNumberAttribute(inertiaNode, "ixy"),
+          ixz: this.parseNumberAttribute(inertiaNode, "ixz"),
+          iyy: this.parseNumberAttribute(inertiaNode, "iyy"),
+          iyz: this.parseNumberAttribute(inertiaNode, "iyz"),
+          izz: this.parseNumberAttribute(inertiaNode, "izz")
+        };
+      }
+    }
+
+    const transform = this.getRelativeTransform(linkName);
+    return {
+      name: linkName,
+      parentJoint,
+      childJoints,
+      visualCount: visualNodes.length,
+      collisionCount: collisionNodes.length,
+      materialNames,
+      mass,
+      inertialOrigin,
+      inertia,
+      pose: transform ? this.toTransformDetailFromPose(transform.translation, transform.rotation) : null
+    };
+  }
+
+  getRobotJointDetail(jointName: string): RobotJointDetail | null {
+    if (!this.robot || !this.robot.joints || !jointName) {
+      return null;
+    }
+
+    const joint = this.robot.joints[jointName];
+    if (!joint) {
+      return null;
+    }
+
+    const jointNode = joint.urdfNode as Element | null;
+    const childNodes = jointNode ? Array.from(jointNode.children) : [];
+    const originNode = childNodes.find((node) => node.nodeName.toLowerCase() === "origin") || null;
+    const limitNode = childNodes.find((node) => node.nodeName.toLowerCase() === "limit") || null;
+    const dynamicsNode = childNodes.find((node) => node.nodeName.toLowerCase() === "dynamics") || null;
+    const mimicNode = childNodes.find((node) => node.nodeName.toLowerCase() === "mimic") || null;
+    const axis = joint.axis
+      ? [joint.axis.x, joint.axis.y, joint.axis.z] as [number, number, number]
+      : null;
+
+    return {
+      name: typeof joint?.urdfName === "string" && joint.urdfName ? joint.urdfName : jointName,
+      type: typeof joint?.jointType === "string" ? joint.jointType : "",
+      parentLink: typeof joint?.parent?.urdfName === "string" ? joint.parent.urdfName : null,
+      childLink: this.getJointChildLinkName(joint),
+      axis,
+      origin: this.parseOriginElement(originNode) || { xyz: [0, 0, 0], rpy: [0, 0, 0] },
+      limit: limitNode ? {
+        lower: this.parseNumberAttribute(limitNode, "lower"),
+        upper: this.parseNumberAttribute(limitNode, "upper"),
+        effort: this.parseNumberAttribute(limitNode, "effort"),
+        velocity: this.parseNumberAttribute(limitNode, "velocity")
+      } : null,
+      dynamics: dynamicsNode ? {
+        damping: this.parseNumberAttribute(dynamicsNode, "damping"),
+        friction: this.parseNumberAttribute(dynamicsNode, "friction")
+      } : null,
+      mimic: mimicNode ? {
+        joint: mimicNode.getAttribute("joint") || "",
+        multiplier: this.parseNumberAttribute(mimicNode, "multiplier"),
+        offset: this.parseNumberAttribute(mimicNode, "offset")
+      } : null,
+      currentValue: Array.isArray(joint.jointValue)
+        ? joint.jointValue.filter((value: unknown): value is number => typeof value === "number" && Number.isFinite(value))
+        : []
+    };
+  }
+
+  private getJointChildLinkName(joint: any): string | null {
+    const childLink = Array.isArray(joint?.children)
+      ? joint.children.find((child: any) => child && (child.isURDFLink === true || child.type === "URDFLink"))
+      : null;
+    return typeof childLink?.urdfName === "string" ? childLink.urdfName : null;
+  }
+
+  private toTransformDetailFromPose(translation: Vector3, rotation: Quaternion): RobotTransformDetail {
+    const euler = new Euler().setFromQuaternion(rotation, "XYZ");
+    return {
+      xyz: [translation.x, translation.y, translation.z],
+      rpy: [euler.x, euler.y, euler.z]
+    };
+  }
+
+  private parseOriginElement(node: Element | null | undefined): RobotTransformDetail | null {
+    if (!node) {
+      return null;
+    }
+
+    return {
+      xyz: this.parseTripleAttribute(node, "xyz", [0, 0, 0]),
+      rpy: this.parseTripleAttribute(node, "rpy", [0, 0, 0])
+    };
+  }
+
+  private parseTripleAttribute(
+    node: Element | null | undefined,
+    attribute: string,
+    fallback: [number, number, number]
+  ): [number, number, number] {
+    if (!node) {
+      return [...fallback] as [number, number, number];
+    }
+
+    const raw = node.getAttribute(attribute);
+    if (!raw) {
+      return [...fallback] as [number, number, number];
+    }
+
+    const parts = raw.trim().split(/\s+/g).map((value) => Number(value));
+    if (parts.length < 3 || parts.slice(0, 3).some((value) => !Number.isFinite(value))) {
+      return [...fallback] as [number, number, number];
+    }
+
+    return [parts[0], parts[1], parts[2]];
+  }
+
+  private parseNumberAttribute(node: Element | null | undefined, attribute: string): number | null {
+    if (!node) {
+      return null;
+    }
+
+    const raw = node.getAttribute(attribute);
+    if (raw == null || raw === "") {
+      return null;
+    }
+
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : null;
   }
 
   clearTfRecords(): void {

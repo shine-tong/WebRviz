@@ -107,10 +107,12 @@
             <h3 data-i18n="section.tfTree">TF Tree</h3>
             <div class="tf-toolbar">
               <button id="tfToggleAllBtn" type="button"></button>
-              <button id="tfSelectBtn" type="button"></button>
+              <div class="tf-select-anchor">
+                <button id="tfSelectBtn" type="button"></button>
+                <div id="tfFilterMenu" class="tf-filter-menu" hidden></div>
+              </div>
             </div>
-            <div id="tfFilterMenu" class="tf-filter-menu" hidden></div>
-            <pre id="tfTree"></pre>
+            <div id="tfTree"></div>
           </section>
         </div>
 
