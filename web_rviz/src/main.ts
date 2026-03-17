@@ -1,4 +1,5 @@
 ﻿import "./style.css";
+import { Vector3 } from "three";
 import { RuntimeConfig, loadConfig, saveConfig } from "./config";
 import { decodePointCloud2 } from "./ros/pointcloud";
 import { ConnectionState, MessageDetailsResponse, MessageTypeDef, RosClient, ServiceInfo, TopicInfo } from "./ros/rosClient";
@@ -20,6 +21,7 @@ interface AppElements {
   connectBtn: HTMLButtonElement;
   syncBtn: HTMLButtonElement;
   sidebarToggleBtn: HTMLButtonElement;
+  plannedTrajectoryToggleBtn: HTMLButtonElement;
   rightSidebarToggleBtn: HTMLButtonElement;
   fixedFrameValue: HTMLElement;
   connectionStatus: HTMLElement;
@@ -61,6 +63,7 @@ interface TopicSubscriptions {
   pointCloud?: any;
   moveGroupGoal?: any;
   moveGroupResult?: any;
+  displayTrajectory?: any;
   executeTrajectoryGoal?: any;
   executeTrajectoryResult?: any;
 }
@@ -82,9 +85,23 @@ interface LogEntry {
   kind: "default" | "moveit";
 }
 
+interface PlannedTrajectoryRestoreState {
+  names: string[];
+  positions: number[];
+}
+
+interface PlannedTrajectoryPayload {
+  jointNames: string[];
+  points: Array<{ positions?: number[] }>;
+  source: "result" | "display";
+  targetFrame: string;
+  restoreState?: PlannedTrajectoryRestoreState;
+}
+
 const POINTCLOUD2_TYPE = "sensor_msgs/PointCloud2";
 const MOVE_GROUP_GOAL_TOPIC = "/move_group/goal";
 const MOVE_GROUP_RESULT_TOPIC = "/move_group/result";
+const DISPLAY_TRAJECTORY_TOPICS = ["/move_group/display_planned_path", "/display_planned_path"] as const;
 const EXECUTE_TRAJECTORY_GOAL_TOPIC = "/execute_trajectory/goal";
 const EXECUTE_TRAJECTORY_RESULT_TOPIC = "/execute_trajectory/result";
 const SIDEBAR_STATE_KEY = "webrviz-sidebar-collapsed";
@@ -92,11 +109,13 @@ const RIGHT_SIDEBAR_STATE_KEY = "webrviz-right-sidebar-collapsed";
 const TRAJ_SAMPLE_INTERVAL_MS = 50;
 const TRAJ_MOTION_THRESHOLD = 0.001;
 const TRAJ_IDLE_STOP_MS = 800;
+const MAX_PLANNED_TRAJECTORY_SAMPLES = 180;
 const TRAJ_ICON_RECORD = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/></svg>';
 const TRAJ_ICON_STOP = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10"/></svg>';
 const TRAJ_ICON_PLAY = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
 const TRAJ_ICON_PAUSE = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>';
 const TRAJ_ICON_CLEAR = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke-width="2" stroke-linecap="round"/></svg>';
+const TRAJ_ICON_PLAN_PATH = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 17a2 2 0 1 0 0.001 0zM12 7a2 2 0 1 0 0.001 0zM18 15a2 2 0 1 0 0.001 0z"/><path d="M7.8 15.9l2.4-6.2M13.7 8.4l2.7 5.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 function getElements(): AppElements {
   const byId = <T extends HTMLElement>(id: string): T => {
@@ -119,6 +138,7 @@ function getElements(): AppElements {
     connectBtn: byId<HTMLButtonElement>("connectBtn"),
     syncBtn: byId<HTMLButtonElement>("syncBtn"),
     sidebarToggleBtn: byId<HTMLButtonElement>("sidebarToggleBtn"),
+    plannedTrajectoryToggleBtn: byId<HTMLButtonElement>("plannedTrajectoryToggleBtn"),
     rightSidebarToggleBtn: byId<HTMLButtonElement>("rightSidebarToggleBtn"),
     fixedFrameValue: byId<HTMLElement>("fixedFrameValue"),
     connectionStatus: byId<HTMLElement>("connectionStatus"),
@@ -165,6 +185,10 @@ let topics: TopicInfo[] = [];
 let logEntries: LogEntry[] = [];
 let subscriptions: TopicSubscriptions = {};
 let lastPointCloudTimestamp = 0;
+let plannedTrajectoryVisible = true;
+let latestPlannedTrajectory: PlannedTrajectoryPayload | null = null;
+let pendingPlannedTrajectory: PlannedTrajectoryPayload | null = null;
+let moveItPreviewArmed = false;
 let sidebarCollapsed = window.localStorage.getItem(SIDEBAR_STATE_KEY) === "1";
 let rightSidebarCollapsed = window.localStorage.getItem(RIGHT_SIDEBAR_STATE_KEY) !== "0";
 let jointState: JointSnapshot[] = [];
@@ -269,6 +293,15 @@ function updateSidebarToggleUi(): void {
   elements.sidebarToggleBtn.setAttribute("aria-label", elements.sidebarToggleBtn.textContent);
 }
 
+function updatePlannedTrajectoryToggleUi(): void {
+  const toggleKey = plannedTrajectoryVisible ? "button.hidePlannedTrajectory" : "button.showPlannedTrajectory";
+  const label = t(currentLanguage, toggleKey as "button.hidePlannedTrajectory" | "button.showPlannedTrajectory");
+  elements.plannedTrajectoryToggleBtn.title = label;
+  elements.plannedTrajectoryToggleBtn.setAttribute("aria-label", label);
+  elements.plannedTrajectoryToggleBtn.setAttribute("aria-pressed", plannedTrajectoryVisible ? "true" : "false");
+  elements.plannedTrajectoryToggleBtn.classList.toggle("is-active", plannedTrajectoryVisible);
+}
+
 function updateRightSidebarToggleUi(): void {
   elements.rightSidebarToggleBtn.textContent = rightSidebarCollapsed ? "<" : ">";
   elements.rightSidebarToggleBtn.setAttribute(
@@ -288,6 +321,7 @@ function refreshUiText(): void {
   updateThemeToggleUi();
   updateConnectButtonText();
   updateSidebarToggleUi();
+  updatePlannedTrajectoryToggleUi();
   updateRightSidebarToggleUi();
   updateTabLabels();
   updateStatusLabel(lastConnectionState, lastConnectionDetail);
@@ -386,29 +420,305 @@ function formatSecondsValue(value: unknown, digits = 2): string | null {
   return value.toFixed(digits) + "s";
 }
 
+function isMoveItPlanSuccessful(statusCode: number, errorCode?: number): boolean {
+  if (typeof errorCode === "number") {
+    return errorCode === 1;
+  }
+  return statusCode === 3;
+}
+
+function toPlannedTrajectoryRestoreState(
+  snapshot: { name?: unknown; position?: unknown } | undefined
+): PlannedTrajectoryRestoreState | undefined {
+  if (!snapshot || !Array.isArray(snapshot.name) || !Array.isArray(snapshot.position)) {
+    return undefined;
+  }
+
+  const names: string[] = [];
+  const positions: number[] = [];
+  const count = Math.min(snapshot.name.length, snapshot.position.length);
+  for (let index = 0; index < count; index += 1) {
+    const name = snapshot.name[index];
+    const position = snapshot.position[index];
+    if (typeof name === "string" && name.length > 0 && typeof position === "number" && Number.isFinite(position)) {
+      names.push(name);
+      positions.push(position);
+    }
+  }
+
+  if (names.length === 0 || positions.length === 0) {
+    return undefined;
+  }
+
+  return { names, positions };
+}
+
+function clearPlannedTrajectoryState(): void {
+  latestPlannedTrajectory = null;
+  pendingPlannedTrajectory = null;
+  sceneManager.clearPlannedTrajectory();
+}
+
+function buildPlannedTrajectoryPathForFrame(
+  jointNames: string[],
+  points: Array<{ positions?: number[] }>,
+  targetFrame: string,
+  fallbackRestoreState?: PlannedTrajectoryRestoreState
+): Vector3[] {
+  if (jointNames.length === 0 || points.length < 2 || !targetFrame) {
+    return [];
+  }
+
+  const restoreState = jointState.length > 0
+    ? {
+        names: jointState.map((joint) => joint.name),
+        positions: jointState.map((joint) => joint.position)
+      }
+    : fallbackRestoreState;
+
+  if (!restoreState || restoreState.names.length === 0 || restoreState.positions.length === 0) {
+    return [];
+  }
+
+  const sampledIndices = new Set<number>([0, points.length - 1]);
+  const stride = Math.max(1, Math.ceil(points.length / MAX_PLANNED_TRAJECTORY_SAMPLES));
+  for (let index = 0; index < points.length; index += stride) {
+    sampledIndices.add(index);
+  }
+
+  const orderedIndices = Array.from(sampledIndices).sort((left, right) => left - right);
+  const path: Vector3[] = [];
+
+  try {
+    for (const index of orderedIndices) {
+      const positions = points[index]?.positions;
+      if (!Array.isArray(positions) || positions.length < jointNames.length) {
+        continue;
+      }
+
+      sceneManager.updateJointStates({
+        name: jointNames,
+        position: positions.slice(0, jointNames.length)
+      });
+
+      const pose = sceneManager.getRobotRelativeTransform(targetFrame);
+      if (!pose) {
+        continue;
+      }
+
+      const translation = pose.translation.clone();
+      const lastPoint = path[path.length - 1];
+      if (!lastPoint || lastPoint.distanceToSquared(translation) > 1e-10) {
+        path.push(translation);
+      }
+    }
+  } finally {
+    sceneManager.updateJointStates({
+      name: restoreState.names,
+      position: restoreState.positions
+    });
+    scheduleRightPanelUpdate();
+  }
+
+  return path;
+}
+
+function getCurrentTcpLinkFrame(): string {
+  const directValue = elements.cartesianFrame.value.trim();
+  if (directValue) {
+    return directValue;
+  }
+
+  const rememberedValue = cartesianFrame.trim();
+  if (rememberedValue) {
+    return rememberedValue;
+  }
+
+  const frames = sceneManager.getLinkList();
+  if (frames.length === 0) {
+    return "";
+  }
+
+  const preferred = sceneManager.getDefaultEndEffectorFrame();
+  if (preferred && frames.includes(preferred)) {
+    return preferred;
+  }
+
+  return frames[frames.length - 1];
+}
+
+function buildPlannedTrajectoryPreview(payload: PlannedTrajectoryPayload): { path: Vector3[]; frame: string } | null {
+  if (!payload.targetFrame) {
+    return null;
+  }
+
+  const path = buildPlannedTrajectoryPathForFrame(
+    payload.jointNames,
+    payload.points,
+    payload.targetFrame,
+    payload.restoreState
+  );
+
+  if (path.length < 2) {
+    return null;
+  }
+
+  return { path, frame: payload.targetFrame };
+}
+
+function tryRenderPlannedTrajectory(payload: PlannedTrajectoryPayload, logSuccess = true): boolean {
+  const preview = buildPlannedTrajectoryPreview(payload);
+  if (!preview) {
+    return false;
+  }
+
+  pendingPlannedTrajectory = null;
+  sceneManager.setPlannedTrajectoryPath(preview.path);
+  sceneManager.setPlannedTrajectoryVisible(plannedTrajectoryVisible);
+  if (logSuccess) {
+    logMoveIt(
+      "planned trajectory visualized | source=" + payload.source +
+      " | points=" + String(preview.path.length) +
+      " | frame=" + preview.frame
+    );
+  }
+  return true;
+}
+
+function retryPendingPlannedTrajectory(): void {
+  if (!pendingPlannedTrajectory) {
+    return;
+  }
+  tryRenderPlannedTrajectory(pendingPlannedTrajectory);
+}
+
+function refreshLatestPlannedTrajectoryPreview(): void {
+  if (!latestPlannedTrajectory) {
+    return;
+  }
+  if (!tryRenderPlannedTrajectory(latestPlannedTrajectory, false)) {
+    pendingPlannedTrajectory = latestPlannedTrajectory;
+  }
+}
+
+function queuePlannedTrajectoryFromJointTrajectory(
+  jointTrajectory:
+    | {
+        joint_names?: string[];
+        points?: Array<{ positions?: number[] }>;
+      }
+    | undefined,
+  source: "result" | "display",
+  restoreState?: PlannedTrajectoryRestoreState
+): void {
+  const jointNames = Array.isArray(jointTrajectory?.joint_names)
+    ? jointTrajectory.joint_names.filter((name): name is string => typeof name === "string" && name.length > 0)
+    : [];
+  const points = Array.isArray(jointTrajectory?.points) ? jointTrajectory.points : [];
+
+  if (jointNames.length === 0 || points.length < 2) {
+    return;
+  }
+
+  const payload: PlannedTrajectoryPayload = {
+    jointNames,
+    points,
+    source,
+    targetFrame: getCurrentTcpLinkFrame(),
+    restoreState
+  };
+  latestPlannedTrajectory = payload;
+  pendingPlannedTrajectory = payload;
+
+  if (!tryRenderPlannedTrajectory(payload)) {
+    logMoveIt("planned trajectory preview pending scene sync | source=" + source);
+  }
+}
+
+function updatePlannedTrajectoryFromMoveItResult(resultMessage: {
+  status?: { status?: number };
+  result?: {
+    error_code?: { val?: number };
+    planned_trajectory?: {
+      joint_trajectory?: {
+        joint_names?: string[];
+        points?: Array<{ positions?: number[] }>;
+      };
+    };
+  };
+}): void {
+  const statusCode = typeof resultMessage.status?.status === "number" ? resultMessage.status.status : -1;
+  const errorCode = typeof resultMessage.result?.error_code?.val === "number" ? resultMessage.result.error_code.val : undefined;
+
+  if (!isMoveItPlanSuccessful(statusCode, errorCode)) {
+    clearPlannedTrajectoryState();
+    return;
+  }
+
+  queuePlannedTrajectoryFromJointTrajectory(resultMessage.result?.planned_trajectory?.joint_trajectory, "result");
+}
+
+function updatePlannedTrajectoryFromDisplayTrajectory(message: {
+  trajectory_start?: {
+    joint_state?: {
+      name?: string[];
+      position?: number[];
+    };
+  };
+  trajectory?: Array<{
+    joint_trajectory?: {
+      joint_names?: string[];
+      points?: Array<{ positions?: number[] }>;
+    };
+  }>;
+}): void {
+  const restoreState = toPlannedTrajectoryRestoreState(message.trajectory_start?.joint_state);
+  const trajectories = Array.isArray(message.trajectory) ? message.trajectory : [];
+  for (let index = trajectories.length - 1; index >= 0; index -= 1) {
+    const jointTrajectory = trajectories[index]?.joint_trajectory;
+    const pointCount = Array.isArray(jointTrajectory?.points) ? jointTrajectory.points.length : 0;
+    if (pointCount >= 2) {
+      queuePlannedTrajectoryFromJointTrajectory(jointTrajectory, "display", restoreState);
+      return;
+    }
+  }
+}
+function findDisplayTrajectoryTopicInfo(): TopicInfo | undefined {
+  for (const topicName of DISPLAY_TRAJECTORY_TOPICS) {
+    const info = findTopicInfo(topicName);
+    if (info) {
+      return info;
+    }
+  }
+
+  return topics.find((topic) => /(^|\/)DisplayTrajectory$/.test(topic.type));
+}
+
 function subscribeMoveItTopics(): void {
   unsubscribe(subscriptions.moveGroupGoal);
   unsubscribe(subscriptions.moveGroupResult);
+  unsubscribe(subscriptions.displayTrajectory);
   unsubscribe(subscriptions.executeTrajectoryGoal);
   unsubscribe(subscriptions.executeTrajectoryResult);
   subscriptions.moveGroupGoal = undefined;
   subscriptions.moveGroupResult = undefined;
+  subscriptions.displayTrajectory = undefined;
   subscriptions.executeTrajectoryGoal = undefined;
   subscriptions.executeTrajectoryResult = undefined;
 
   const subscribed: string[] = [];
 
-  const subscribeIfAvailable = (
-    topicName: string,
+  const subscribeResolvedTopic = (
+    info: TopicInfo | undefined,
     fallbackType: string,
     assign: (topic: any) => void,
     onMessage: (message: unknown) => void
   ): void => {
-    const info = findTopicInfo(topicName);
     if (!info) {
       return;
     }
 
+    const topicName = info.name;
     const topicType = info.type || fallbackType;
     try {
       const topic = rosClient.createTopic(topicName, topicType);
@@ -418,6 +728,15 @@ function subscribeMoveItTopics(): void {
     } catch (error) {
       logMoveIt("monitor skipped " + topicName + ": " + formatError(error));
     }
+  };
+
+  const subscribeIfAvailable = (
+    topicName: string,
+    fallbackType: string,
+    assign: (topic: any) => void,
+    onMessage: (message: unknown) => void
+  ): void => {
+    subscribeResolvedTopic(findTopicInfo(topicName), fallbackType, assign, onMessage);
   };
 
   subscribeIfAvailable(MOVE_GROUP_GOAL_TOPIC, "moveit_msgs/MoveGroupActionGoal", (topic) => {
@@ -459,17 +778,28 @@ function subscribeMoveItTopics(): void {
       parts.push("plan_only=true");
     }
 
+    moveItPreviewArmed = true;
+    clearPlannedTrajectoryState();
     logMoveIt(parts.join(" | "));
   });
 
   subscribeIfAvailable(MOVE_GROUP_RESULT_TOPIC, "moveit_msgs/MoveGroupActionResult", (topic) => {
     subscriptions.moveGroupResult = topic;
   }, (message) => {
+    if (!moveItPreviewArmed) {
+      return;
+    }
     const resultMessage = message as {
       status?: { status?: number };
       result?: {
         planning_time?: number;
         error_code?: { val?: number };
+        planned_trajectory?: {
+          joint_trajectory?: {
+            joint_names?: string[];
+            points?: Array<{ positions?: number[] }>;
+          };
+        };
       };
     };
 
@@ -488,7 +818,24 @@ function subscribeMoveItTopics(): void {
       parts.push("error_code=" + String(resultMessage.result.error_code.val));
     }
 
+    updatePlannedTrajectoryFromMoveItResult(resultMessage);
     logMoveIt(parts.join(" | "));
+  });
+
+  subscribeResolvedTopic(findDisplayTrajectoryTopicInfo(), "moveit_msgs/DisplayTrajectory", (topic) => {
+    subscriptions.displayTrajectory = topic;
+  }, (message) => {
+    if (!moveItPreviewArmed) {
+      return;
+    }
+    updatePlannedTrajectoryFromDisplayTrajectory(message as {
+      trajectory?: Array<{
+        joint_trajectory?: {
+          joint_names?: string[];
+          points?: Array<{ positions?: number[] }>;
+        };
+      }>;
+    });
   });
 
   subscribeIfAvailable(EXECUTE_TRAJECTORY_GOAL_TOPIC, "moveit_msgs/ExecuteTrajectoryActionGoal", (topic) => {
@@ -1023,6 +1370,7 @@ function updateFrameOptions(): void {
     elements.cartesianFrame.innerHTML = "";
     cartesianFrame = "";
     lastFrameOptions = [];
+    sceneManager.setEndEffectorFrame("");
     refreshEnhancedSelect(elements.cartesianFrame);
     return;
   }
@@ -1062,6 +1410,7 @@ function updateFrameOptions(): void {
     frames[0];
   cartesianFrame = frames.includes(preferred) ? preferred : frames[0];
   elements.cartesianFrame.value = cartesianFrame;
+  sceneManager.setEndEffectorFrame(cartesianFrame);
   refreshEnhancedSelect(elements.cartesianFrame);
 }
 function renderCartesianValues(): void {
@@ -1588,6 +1937,12 @@ function clearTrajectory(): void {
   updateTrajectoryUi();
 }
 
+function clearAllTrajectoryDisplays(): void {
+  moveItPreviewArmed = false;
+  clearPlannedTrajectoryState();
+  clearTrajectory();
+}
+
 function recordTrajectorySnapshot(message: unknown): void {
   if (!isRecording || isPlaying) {
     return;
@@ -1787,6 +2142,7 @@ function clearSubscriptions(): void {
   unsubscribe(subscriptions.pointCloud);
   unsubscribe(subscriptions.moveGroupGoal);
   unsubscribe(subscriptions.moveGroupResult);
+  unsubscribe(subscriptions.displayTrajectory);
   unsubscribe(subscriptions.executeTrajectoryGoal);
   unsubscribe(subscriptions.executeTrajectoryResult);
   subscriptions = {};
@@ -1854,6 +2210,7 @@ async function subscribeCoreTopics(): Promise<void> {
     }
     sceneManager.updateJointStates(message);
     updateJointStateSnapshot(message);
+    retryPendingPlannedTrajectory();
     recordTrajectorySnapshot(message);
     scheduleRightPanelUpdate();
   });
@@ -1861,12 +2218,14 @@ async function subscribeCoreTopics(): Promise<void> {
   subscriptions.tf = rosClient.createTopic("/tf", "tf2_msgs/TFMessage");
   subscriptions.tf.subscribe((message: unknown) => {
     sceneManager.upsertTfMessage(message);
+    retryPendingPlannedTrajectory();
     scheduleRightPanelUpdate();
   });
 
   subscriptions.tfStatic = rosClient.createTopic("/tf_static", "tf2_msgs/TFMessage");
   subscriptions.tfStatic.subscribe((message: unknown) => {
     sceneManager.upsertTfMessage(message);
+    retryPendingPlannedTrajectory();
     scheduleRightPanelUpdate();
   });
 
@@ -1901,10 +2260,12 @@ async function subscribePointCloud(topicName: string): Promise<void> {
 async function loadRobotIntoScene(): Promise<void> {
   const loaded = await loadRobotModel(rosClient, config.urdfFallbackPath, config.packageRootUrl);
   sceneManager.setRobot(loaded.robot, loaded.rootLink);
+  refreshLatestPlannedTrajectoryPreview();
   log(`robot model loaded (root=${loaded.rootLink})`);
 }
 
 async function connect(): Promise<void> {
+  clearAllTrajectoryDisplays();
   syncConfigFromUi();
   log(`connecting ROS bridge: ${config.rosbridgeUrl}`);
 
@@ -1943,14 +2304,7 @@ function disconnect(): void {
   sceneManager.setPointCloud(null);
   sceneManager.setRobot(null);
   sceneManager.clearTfRecords();
-  stopPlayback();
-  isRecording = false;
-  isPlaybackPaused = false;
-  recordArmed = false;
-  recordArmBaseline = null;
-  recordLastMotionTime = 0;
-  recordLastPositions = null;
-  clearTrajectory();
+  clearAllTrajectoryDisplays();
   clearRightPanelState();
   log("disconnected");
 }
@@ -2001,6 +2355,9 @@ async function syncFromRviz(): Promise<void> {
 
 applyTheme(currentTheme);
 sceneManager.setTheme(currentTheme);
+sceneManager.setPlannedTrajectoryVisible(plannedTrajectoryVisible);
+elements.plannedTrajectoryToggleBtn.innerHTML = TRAJ_ICON_PLAN_PATH;
+updatePlannedTrajectoryToggleUi();
 renderConfigToUi();
 updatePointCloudOptions([], config.defaultPointCloudTopic);
 enhanceSelect(elements.pointCloudTopic);
@@ -2076,6 +2433,12 @@ elements.rightTabRobot.addEventListener("click", () => {
 
 elements.rightTabRosInfo.addEventListener("click", () => {
   setRightPanelTab("rosInfo");
+});
+
+elements.plannedTrajectoryToggleBtn.addEventListener("click", () => {
+  plannedTrajectoryVisible = !plannedTrajectoryVisible;
+  sceneManager.setPlannedTrajectoryVisible(plannedTrajectoryVisible);
+  updatePlannedTrajectoryToggleUi();
 });
 
 elements.tfToggleAllBtn.addEventListener("click", () => {
@@ -2154,6 +2517,8 @@ elements.cartesianFrame.addEventListener("change", () => {
     return;
   }
   cartesianFrame = elements.cartesianFrame.value;
+  sceneManager.setEndEffectorFrame(cartesianFrame);
+  refreshLatestPlannedTrajectoryPreview();
   log(`cartesian frame changed: ${cartesianFrame || "(none)"}`);
   scheduleRightPanelUpdate();
 });
@@ -2255,6 +2620,7 @@ window.addEventListener("beforeunload", () => {
 });
 
 log(t(currentLanguage, "log.ready"));
+
 
 
 

@@ -33,6 +33,8 @@ const translations: Record<Language, TranslationMap> = {
     "button.view": "View",
     "button.showSidebar": "Show Sidebar",
     "button.hideSidebar": "Hide Sidebar",
+    "button.showPlannedTrajectory": "Show plan path",
+    "button.hidePlannedTrajectory": "Hide plan path",
     "button.switchLanguage": "Switch language",
     "button.switchTheme": "Switch theme",
     "button.themeLight": "Light",
