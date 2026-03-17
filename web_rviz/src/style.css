@@ -1453,6 +1453,16 @@ body {
   z-index: 10;
 }
 
+.viewport-top-right-tools {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 10;
+}
+
 .viewport-top-left-tools > button {
   flex: 0 0 auto;
 }
@@ -1499,20 +1509,26 @@ body {
 }
 
 .viewport-toggle-btn.is-active {
-  background: var(--surface-button-active);
-  color: var(--accent);
-  border-color: var(--accent);
-  box-shadow: var(--accent-ring), var(--accent-ring-inset), 0 10px 20px rgba(17, 33, 55, 0.16);
+  background: var(--surface-button);
+  color: var(--text);
+  border-color: var(--border-strong);
+  box-shadow: none;
 }
 
 .viewport-toggle-btn.is-active svg {
-  transform: scale(1.05);
+  transform: none;
 }
 
 @media (max-width: 640px) {
   .viewport-top-left-tools {
     top: 10px;
     left: 10px;
+    gap: 6px;
+  }
+
+  .viewport-top-right-tools {
+    top: 10px;
+    right: 10px;
     gap: 6px;
   }
 

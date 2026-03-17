@@ -22,6 +22,7 @@ interface AppElements {
   syncBtn: HTMLButtonElement;
   sidebarToggleBtn: HTMLButtonElement;
   plannedTrajectoryToggleBtn: HTMLButtonElement;
+  resetViewBtn: HTMLButtonElement;
   rightSidebarToggleBtn: HTMLButtonElement;
   fixedFrameValue: HTMLElement;
   connectionStatus: HTMLElement;
@@ -98,6 +99,19 @@ interface PlannedTrajectoryPayload {
   restoreState?: PlannedTrajectoryRestoreState;
 }
 
+interface PlannedTrajectoryPose {
+  translation: Vector3;
+  rotation: { x: number; y: number; z: number; w: number };
+}
+
+interface PlannedTrajectoryPreview {
+  path: Vector3[];
+  frame: string;
+  startPose: PlannedTrajectoryPose | null;
+  endPose: PlannedTrajectoryPose | null;
+}
+
+
 
 interface TfTreeGraph {
   roots: string[];
@@ -132,6 +146,7 @@ const TRAJ_ICON_PLAY = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 
 const TRAJ_ICON_PAUSE = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>';
 const TRAJ_ICON_CLEAR = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke-width="2" stroke-linecap="round"/></svg>';
 const TRAJ_ICON_PLAN_PATH = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 17a2 2 0 1 0 0.001 0zM12 7a2 2 0 1 0 0.001 0zM18 15a2 2 0 1 0 0.001 0z"/><path d="M7.8 15.9l2.4-6.2M13.7 8.4l2.7 5.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const VIEW_ICON_RESET = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.8 7.2 6.8 12 9.8l4.8-3-4.8-3Z"/><path d="M7.2 6.8V13L12 16V9.8"/><path d="M16.8 6.8V13L12 16"/><path d="M6.4 16.3a7.2 7.2 0 0 0 11 .5"/><path d="M18 16.8v2.7h-2.7"/></svg>';
 
 function getElements(): AppElements {
   const byId = <T extends HTMLElement>(id: string): T => {
@@ -155,6 +170,7 @@ function getElements(): AppElements {
     syncBtn: byId<HTMLButtonElement>("syncBtn"),
     sidebarToggleBtn: byId<HTMLButtonElement>("sidebarToggleBtn"),
     plannedTrajectoryToggleBtn: byId<HTMLButtonElement>("plannedTrajectoryToggleBtn"),
+    resetViewBtn: byId<HTMLButtonElement>("resetViewBtn"),
     rightSidebarToggleBtn: byId<HTMLButtonElement>("rightSidebarToggleBtn"),
     fixedFrameValue: byId<HTMLElement>("fixedFrameValue"),
     connectionStatus: byId<HTMLElement>("connectionStatus"),
@@ -319,6 +335,12 @@ function updatePlannedTrajectoryToggleUi(): void {
   elements.plannedTrajectoryToggleBtn.classList.toggle("is-active", plannedTrajectoryVisible);
 }
 
+function updateResetViewButtonUi(): void {
+  const label = t(currentLanguage, "button.resetView");
+  elements.resetViewBtn.title = label;
+  elements.resetViewBtn.setAttribute("aria-label", label);
+}
+
 function updateRightSidebarToggleUi(): void {
   elements.rightSidebarToggleBtn.textContent = rightSidebarCollapsed ? "<" : ">";
   elements.rightSidebarToggleBtn.setAttribute(
@@ -339,6 +361,7 @@ function refreshUiText(): void {
   updateConnectButtonText();
   updateSidebarToggleUi();
   updatePlannedTrajectoryToggleUi();
+  updateResetViewButtonUi();
   updateRightSidebarToggleUi();
   updateTabLabels();
   updateStatusLabel(lastConnectionState, lastConnectionDetail);
@@ -481,9 +504,9 @@ function buildPlannedTrajectoryPathForFrame(
   points: Array<{ positions?: number[] }>,
   targetFrame: string,
   fallbackRestoreState?: PlannedTrajectoryRestoreState
-): Vector3[] {
+): { path: Vector3[]; startPose: PlannedTrajectoryPose | null; endPose: PlannedTrajectoryPose | null } {
   if (jointNames.length === 0 || points.length < 2 || !targetFrame) {
-    return [];
+    return { path: [], startPose: null, endPose: null };
   }
 
   const restoreState = jointState.length > 0
@@ -494,7 +517,7 @@ function buildPlannedTrajectoryPathForFrame(
     : fallbackRestoreState;
 
   if (!restoreState || restoreState.names.length === 0 || restoreState.positions.length === 0) {
-    return [];
+    return { path: [], startPose: null, endPose: null };
   }
 
   const sampledIndices = new Set<number>([0, points.length - 1]);
@@ -505,6 +528,8 @@ function buildPlannedTrajectoryPathForFrame(
 
   const orderedIndices = Array.from(sampledIndices).sort((left, right) => left - right);
   const path: Vector3[] = [];
+  let startPose: PlannedTrajectoryPose | null = null;
+  let endPose: PlannedTrajectoryPose | null = null;
 
   try {
     for (const index of orderedIndices) {
@@ -524,6 +549,20 @@ function buildPlannedTrajectoryPathForFrame(
       }
 
       const translation = pose.translation.clone();
+      const previewPose: PlannedTrajectoryPose = {
+        translation: translation.clone(),
+        rotation: {
+          x: pose.rotation.x,
+          y: pose.rotation.y,
+          z: pose.rotation.z,
+          w: pose.rotation.w
+        }
+      };
+      if (!startPose) {
+        startPose = previewPose;
+      }
+      endPose = previewPose;
+
       const lastPoint = path[path.length - 1];
       if (!lastPoint || lastPoint.distanceToSquared(translation) > 1e-10) {
         path.push(translation);
@@ -537,7 +576,7 @@ function buildPlannedTrajectoryPathForFrame(
     scheduleRightPanelUpdate();
   }
 
-  return path;
+  return { path, startPose, endPose };
 }
 
 function getCurrentTcpLinkFrame(): string {
@@ -564,23 +603,28 @@ function getCurrentTcpLinkFrame(): string {
   return frames[frames.length - 1];
 }
 
-function buildPlannedTrajectoryPreview(payload: PlannedTrajectoryPayload): { path: Vector3[]; frame: string } | null {
+function buildPlannedTrajectoryPreview(payload: PlannedTrajectoryPayload): PlannedTrajectoryPreview | null {
   if (!payload.targetFrame) {
     return null;
   }
 
-  const path = buildPlannedTrajectoryPathForFrame(
+  const preview = buildPlannedTrajectoryPathForFrame(
     payload.jointNames,
     payload.points,
     payload.targetFrame,
     payload.restoreState
   );
 
-  if (path.length < 2) {
+  if (preview.path.length < 2) {
     return null;
   }
 
-  return { path, frame: payload.targetFrame };
+  return {
+    path: preview.path,
+    frame: payload.targetFrame,
+    startPose: preview.startPose,
+    endPose: preview.endPose
+  };
 }
 
 function tryRenderPlannedTrajectory(payload: PlannedTrajectoryPayload, logSuccess = true): boolean {
@@ -590,7 +634,7 @@ function tryRenderPlannedTrajectory(payload: PlannedTrajectoryPayload, logSucces
   }
 
   pendingPlannedTrajectory = null;
-  sceneManager.setPlannedTrajectoryPath(preview.path);
+  sceneManager.setPlannedTrajectoryPath(preview.path, preview.startPose, preview.endPose);
   sceneManager.setPlannedTrajectoryVisible(plannedTrajectoryVisible);
   if (logSuccess) {
     logMoveIt(
@@ -2757,7 +2801,9 @@ applyTheme(currentTheme);
 sceneManager.setTheme(currentTheme);
 sceneManager.setPlannedTrajectoryVisible(plannedTrajectoryVisible);
 elements.plannedTrajectoryToggleBtn.innerHTML = TRAJ_ICON_PLAN_PATH;
+elements.resetViewBtn.innerHTML = VIEW_ICON_RESET;
 updatePlannedTrajectoryToggleUi();
+updateResetViewButtonUi();
 renderConfigToUi();
 updatePointCloudOptions([], config.defaultPointCloudTopic);
 enhanceSelect(elements.pointCloudTopic);
@@ -2839,6 +2885,10 @@ elements.plannedTrajectoryToggleBtn.addEventListener("click", () => {
   plannedTrajectoryVisible = !plannedTrajectoryVisible;
   sceneManager.setPlannedTrajectoryVisible(plannedTrajectoryVisible);
   updatePlannedTrajectoryToggleUi();
+});
+
+elements.resetViewBtn.addEventListener("click", () => {
+  sceneManager.resetView();
 });
 
 elements.tfToggleAllBtn.addEventListener("click", () => {

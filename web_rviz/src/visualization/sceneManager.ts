@@ -3,7 +3,9 @@
   AxesHelper,
   BufferAttribute,
   BufferGeometry,
+  CanvasTexture,
   Color,
+  CylinderGeometry,
   DirectionalLight,
   Euler,
   EdgesGeometry,
@@ -13,6 +15,7 @@
   LineBasicMaterial,
   LineSegments,
   Material,
+  MeshBasicMaterial,
   Matrix4,
   Mesh,
   MeshStandardMaterial,
@@ -21,6 +24,9 @@
   PointsMaterial,
   Quaternion,
   Scene,
+  SphereGeometry,
+  Sprite,
+  SpriteMaterial,
   Vector3,
   WebGLRenderer
 } from "three";
@@ -132,6 +138,8 @@ export class SceneManager {
   private readonly keyLight: DirectionalLight;
   private readonly fillLight: DirectionalLight;
   private plannedTrajectoryLine: Line2 | null = null;
+  private plannedTrajectoryStartMarker: Group | null = null;
+  private plannedTrajectoryEndMarker: Group | null = null;
   private plannedTrajectoryVisible = true;
   private readonly tfRecords = new Map<string, TfRecord>();
   private readonly tfAxes = new Map<string, AxesHelper>();
@@ -167,6 +175,8 @@ export class SceneManager {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = false;
     this.controls.target.set(0, 0, 0.5);
+    this.controls.update();
+    this.controls.saveState();
 
     this.robotLayer = new Group();
     this.tfLayer = new Group();
@@ -211,6 +221,12 @@ export class SceneManager {
     this.targetFps = Math.max(1, value);
   }
 
+  resetView(): void {
+    this.camera.up.set(0, 0, 1);
+    this.controls.reset();
+    this.controls.update();
+  }
+
   setTheme(theme: SceneTheme): void {
     this.currentTheme = theme;
 
@@ -232,7 +248,11 @@ export class SceneManager {
     this.updatePlannedTrajectoryVisibility();
   }
 
-  setPlannedTrajectoryPath(points: ReadonlyArray<Vector3>): void {
+  setPlannedTrajectoryPath(
+    points: ReadonlyArray<Vector3>,
+    startPose?: { translation: Vector3; rotation: { x: number; y: number; z: number; w: number } } | null,
+    endPose?: { translation: Vector3; rotation: { x: number; y: number; z: number; w: number } } | null
+  ): void {
     this.clearPlannedTrajectory();
 
     if (points.length < 2) {
@@ -269,10 +289,32 @@ export class SceneManager {
     this.plannedTrajectoryLine.renderOrder = 3;
     this.plannedTrajectoryLine.frustumCulled = false;
     this.scene.add(this.plannedTrajectoryLine);
+
+    if (startPose) {
+      this.plannedTrajectoryStartMarker = this.createPlannedTrajectoryPoseMarker("start", startPose);
+      this.scene.add(this.plannedTrajectoryStartMarker);
+    }
+
+    if (endPose) {
+      this.plannedTrajectoryEndMarker = this.createPlannedTrajectoryPoseMarker("end", endPose);
+      this.scene.add(this.plannedTrajectoryEndMarker);
+    }
+
+    this.updatePlannedTrajectoryAppearance();
     this.updatePlannedTrajectoryVisibility();
   }
 
   clearPlannedTrajectory(): void {
+    if (this.plannedTrajectoryStartMarker) {
+      this.disposePlannedTrajectoryPoseMarker(this.plannedTrajectoryStartMarker);
+      this.plannedTrajectoryStartMarker = null;
+    }
+
+    if (this.plannedTrajectoryEndMarker) {
+      this.disposePlannedTrajectoryPoseMarker(this.plannedTrajectoryEndMarker);
+      this.plannedTrajectoryEndMarker = null;
+    }
+
     if (!this.plannedTrajectoryLine) {
       return;
     }
@@ -1187,6 +1229,14 @@ export class SceneManager {
   }
 
   private updatePlannedTrajectoryAppearance(): void {
+    if (this.plannedTrajectoryStartMarker) {
+      this.updatePlannedTrajectoryPoseMarkerAppearance(this.plannedTrajectoryStartMarker, "start");
+    }
+
+    if (this.plannedTrajectoryEndMarker) {
+      this.updatePlannedTrajectoryPoseMarkerAppearance(this.plannedTrajectoryEndMarker, "end");
+    }
+
     if (!this.plannedTrajectoryLine) {
       return;
     }
@@ -1209,6 +1259,12 @@ export class SceneManager {
     if (this.plannedTrajectoryLine) {
       this.plannedTrajectoryLine.visible = this.plannedTrajectoryVisible;
     }
+    if (this.plannedTrajectoryStartMarker) {
+      this.plannedTrajectoryStartMarker.visible = this.plannedTrajectoryVisible;
+    }
+    if (this.plannedTrajectoryEndMarker) {
+      this.plannedTrajectoryEndMarker.visible = this.plannedTrajectoryVisible;
+    }
   }
 
   private getPlannedTrajectoryColor(): number {
@@ -1221,6 +1277,224 @@ export class SceneManager {
 
   private getPlannedTrajectoryLineWidth(): number {
     return 1.25;
+  }
+
+  private createPlannedTrajectoryPoseMarker(
+    kind: "start" | "end",
+    pose: { translation: Vector3; rotation: { x: number; y: number; z: number; w: number } }
+  ): Group {
+    const marker = new Group();
+    marker.position.copy(pose.translation);
+    marker.quaternion.set(
+      pose.rotation.x,
+      pose.rotation.y,
+      pose.rotation.z,
+      pose.rotation.w
+    );
+    marker.renderOrder = 4;
+
+    marker.add(this.createPlannedTrajectoryAxisMesh("x", 0xff5a5a));
+    marker.add(this.createPlannedTrajectoryAxisMesh("y", 0x4bd37b));
+    marker.add(this.createPlannedTrajectoryAxisMesh("z", 0x4aa8ff));
+
+    const sphere = new Mesh(
+      new SphereGeometry(0.014, 14, 12),
+      new MeshBasicMaterial({
+        color: kind === "start" ? this.getPlannedTrajectoryStartMarkerColor() : this.getPlannedTrajectoryEndMarkerColor(),
+        transparent: true,
+        opacity: this.getPlannedTrajectoryMarkerOpacity(),
+        depthWrite: false,
+        depthTest: false,
+        toneMapped: false
+      })
+    );
+    sphere.name = "planned-trajectory-origin";
+    sphere.userData.__plannedTrajectoryOrigin = true;
+    sphere.renderOrder = 4;
+    marker.add(sphere);
+
+    const label = this.createPlannedTrajectoryLabelSprite(kind);
+    const labelOffset = new Vector3(0, 0, this.getPlannedTrajectoryMarkerLabelOffset()).applyQuaternion(
+      new Quaternion(
+        pose.rotation.x,
+        pose.rotation.y,
+        pose.rotation.z,
+        pose.rotation.w
+      ).invert()
+    );
+    label.position.copy(labelOffset);
+    marker.add(label);
+
+    this.updatePlannedTrajectoryPoseMarkerAppearance(marker, kind);
+    return marker;
+  }
+
+  private createPlannedTrajectoryAxisMesh(axis: "x" | "y" | "z", color: number): Mesh {
+    const length = this.getPlannedTrajectoryMarkerAxisLength();
+    const radius = this.getPlannedTrajectoryMarkerAxisRadius();
+    const mesh = new Mesh(
+      new CylinderGeometry(radius, radius, length, 10),
+      new MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: this.getPlannedTrajectoryMarkerAxisOpacity(),
+        depthWrite: false,
+        depthTest: false,
+        toneMapped: false
+      })
+    );
+    mesh.name = "planned-trajectory-axis-" + axis;
+    mesh.userData.__plannedTrajectoryAxis = true;
+    mesh.userData.__plannedTrajectoryAxisColor = color;
+    mesh.renderOrder = 4;
+
+    if (axis === "x") {
+      mesh.rotation.z = -Math.PI / 2;
+      mesh.position.x = length / 2;
+    } else if (axis === "y") {
+      mesh.position.y = length / 2;
+    } else {
+      mesh.rotation.x = Math.PI / 2;
+      mesh.position.z = length / 2;
+    }
+
+    return mesh;
+  }
+
+  private createPlannedTrajectoryLabelSprite(kind: "start" | "end"): Sprite {
+    const material = new SpriteMaterial({
+      map: this.createPlannedTrajectoryLabelTexture(kind),
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      toneMapped: false
+    });
+    const sprite = new Sprite(material);
+    sprite.name = "planned-trajectory-label";
+    sprite.userData.__plannedTrajectoryLabelKind = kind;
+    sprite.scale.set(0.08, 0.044, 1);
+    sprite.renderOrder = 5;
+    return sprite;
+  }
+
+  private createPlannedTrajectoryLabelTexture(kind: "start" | "end"): CanvasTexture {
+    const canvas = document.createElement("canvas");
+    canvas.width = 96;
+    canvas.height = 56;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return new CanvasTexture(canvas);
+    }
+
+    const width = canvas.width;
+    const height = canvas.height;
+    const radius = 14;
+    const color = "#" + (kind === "start" ? this.getPlannedTrajectoryStartMarkerColor() : this.getPlannedTrajectoryEndMarkerColor()).toString(16).padStart(6, "0");
+    const label = kind === "start" ? "S" : "E";
+
+    context.clearRect(0, 0, width, height);
+    context.fillStyle = color;
+    context.strokeStyle = "rgba(255,255,255,0.22)";
+    context.lineWidth = 2;
+    context.beginPath();
+    context.moveTo(radius, 4);
+    context.lineTo(width - radius, 4);
+    context.quadraticCurveTo(width - 4, 4, width - 4, radius);
+    context.lineTo(width - 4, height - radius);
+    context.quadraticCurveTo(width - 4, height - 4, width - radius, height - 4);
+    context.lineTo(radius, height - 4);
+    context.quadraticCurveTo(4, height - 4, 4, height - radius);
+    context.lineTo(4, radius);
+    context.quadraticCurveTo(4, 4, radius, 4);
+    context.closePath();
+    context.fill();
+    context.stroke();
+
+    context.fillStyle = "#ffffff";
+    context.font = "700 28px Segoe UI";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(label, width / 2, height / 2 + 1);
+
+    const texture = new CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    return texture;
+  }
+
+  private disposePlannedTrajectoryPoseMarker(marker: Group): void {
+    this.scene.remove(marker);
+    marker.traverse((object: any) => {
+      if (object.geometry && typeof object.geometry.dispose === "function") {
+        object.geometry.dispose();
+      }
+
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        if (material && "map" in material && material.map && typeof material.map.dispose === "function") {
+          material.map.dispose();
+        }
+        if (material instanceof Material) {
+          material.dispose();
+        }
+      }
+    });
+  }
+
+  private updatePlannedTrajectoryPoseMarkerAppearance(marker: Group, kind: "start" | "end"): void {
+    marker.traverse((object: any) => {
+      if (object instanceof Sprite && object.material instanceof SpriteMaterial) {
+        if (object.material.map) {
+          object.material.map.dispose();
+        }
+        object.material.map = this.createPlannedTrajectoryLabelTexture(kind);
+        object.material.needsUpdate = true;
+        return;
+      }
+
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        if (material instanceof MeshBasicMaterial) {
+          if (object.userData.__plannedTrajectoryOrigin === true) {
+            material.color.setHex(kind === "start" ? this.getPlannedTrajectoryStartMarkerColor() : this.getPlannedTrajectoryEndMarkerColor());
+            material.opacity = this.getPlannedTrajectoryMarkerOpacity();
+          } else if (object.userData.__plannedTrajectoryAxis === true) {
+            material.color.setHex(object.userData.__plannedTrajectoryAxisColor ?? 0xffffff);
+            material.opacity = this.getPlannedTrajectoryMarkerAxisOpacity();
+          }
+          material.depthWrite = false;
+          material.depthTest = false;
+          material.needsUpdate = true;
+        }
+      }
+    });
+  }
+
+  private getPlannedTrajectoryStartMarkerColor(): number {
+    return this.currentTheme === "light" ? 0x0f9f6e : 0x62d99f;
+  }
+
+  private getPlannedTrajectoryEndMarkerColor(): number {
+    return this.currentTheme === "light" ? 0xd9485f : 0xff8c72;
+  }
+
+  private getPlannedTrajectoryMarkerOpacity(): number {
+    return this.currentTheme === "light" ? 0.96 : 0.98;
+  }
+
+  private getPlannedTrajectoryMarkerAxisOpacity(): number {
+    return this.currentTheme === "light" ? 0.92 : 0.96;
+  }
+
+  private getPlannedTrajectoryMarkerAxisLength(): number {
+    return 0.075 * 0.75;
+  }
+
+  private getPlannedTrajectoryMarkerAxisRadius(): number {
+    return 0.00375;
+  }
+
+  private getPlannedTrajectoryMarkerLabelOffset(): number {
+    return 0.05;
   }
 
   private cleanupRobotAppearance(root: Group): void {
