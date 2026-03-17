@@ -5,9 +5,17 @@
   BufferGeometry,
   Color,
   DirectionalLight,
+  Euler,
+  EdgesGeometry,
   GridHelper,
   Group,
+  Line,
+  LineBasicMaterial,
+  LineSegments,
+  Material,
   Matrix4,
+  Mesh,
+  MeshStandardMaterial,
   PerspectiveCamera,
   Points,
   PointsMaterial,
@@ -17,8 +25,13 @@
   WebGLRenderer
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { Line2 } from "three/examples/jsm/lines/Line2.js";
+import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
+import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 
 export type SceneTheme = "dark" | "light";
+
+type RobotPartRole = "body" | "joint" | "tool" | "cable" | "accent";
 
 interface TfRecord {
   parent: string;
@@ -40,6 +53,72 @@ export interface TfNode {
   rotation: Quaternion;
 }
 
+export interface RobotJointConnection {
+  name: string;
+  parent: string;
+  child: string;
+  type: string;
+}
+
+export interface RobotTransformDetail {
+  xyz: [number, number, number];
+  rpy: [number, number, number];
+}
+
+export interface RobotInertiaDetail {
+  ixx: number | null;
+  ixy: number | null;
+  ixz: number | null;
+  iyy: number | null;
+  iyz: number | null;
+  izz: number | null;
+}
+
+export interface RobotLinkDetail {
+  name: string;
+  parentJoint: string | null;
+  childJoints: string[];
+  visualCount: number;
+  collisionCount: number;
+  materialNames: string[];
+  mass: number | null;
+  inertialOrigin: RobotTransformDetail | null;
+  inertia: RobotInertiaDetail | null;
+  pose: RobotTransformDetail | null;
+}
+
+export interface RobotJointLimitDetail {
+  lower: number | null;
+  upper: number | null;
+  effort: number | null;
+  velocity: number | null;
+}
+
+export interface RobotJointDynamicsDetail {
+  damping: number | null;
+  friction: number | null;
+}
+
+export interface RobotJointMimicDetail {
+  joint: string;
+  multiplier: number | null;
+  offset: number | null;
+}
+
+export interface RobotJointDetail {
+  name: string;
+  type: string;
+  parentLink: string | null;
+  childLink: string | null;
+  axis: [number, number, number] | null;
+  origin: RobotTransformDetail | null;
+  limit: RobotJointLimitDetail | null;
+  dynamics: RobotJointDynamicsDetail | null;
+  mimic: RobotJointMimicDetail | null;
+  currentValue: number[];
+}
+
+
 export class SceneManager {
   private readonly container: HTMLElement;
   private readonly scene: Scene;
@@ -49,6 +128,11 @@ export class SceneManager {
   private readonly robotLayer: Group;
   private readonly tfLayer: Group;
   private readonly worldGrid: GridHelper;
+  private readonly ambientLight: AmbientLight;
+  private readonly keyLight: DirectionalLight;
+  private readonly fillLight: DirectionalLight;
+  private plannedTrajectoryLine: Line2 | null = null;
+  private plannedTrajectoryVisible = true;
   private readonly tfRecords = new Map<string, TfRecord>();
   private readonly tfAxes = new Map<string, AxesHelper>();
   private endEffectorAxis: AxesHelper | null = null;
@@ -92,9 +176,11 @@ export class SceneManager {
     this.worldGrid.rotation.x = Math.PI / 2;
     this.worldGrid.position.set(0, 0, 0);
 
-    const ambientLight = new AmbientLight(0xffffff, 0.7);
-    const directionalLight = new DirectionalLight(0xffffff, 0.7);
-    directionalLight.position.set(3, 2, 5);
+    this.ambientLight = new AmbientLight(0xf2f6ff, 0.68);
+    this.keyLight = new DirectionalLight(0xfff1d4, 1.0);
+    this.keyLight.position.set(4.2, -2.6, 6.4);
+    this.fillLight = new DirectionalLight(0xd7e7ff, 0.34);
+    this.fillLight.position.set(-4.8, 3.4, 3.2);
 
     this.pointCloudMaterial = new PointsMaterial({
       size: 0.02,
@@ -105,8 +191,9 @@ export class SceneManager {
     });
 
     this.scene.add(this.worldGrid);
-    this.scene.add(ambientLight);
-    this.scene.add(directionalLight);
+    this.scene.add(this.ambientLight);
+    this.scene.add(this.keyLight);
+    this.scene.add(this.fillLight);
     this.scene.add(this.robotLayer);
     this.scene.add(this.tfLayer);
 
@@ -130,11 +217,79 @@ export class SceneManager {
     if (theme === "light") {
       this.scene.background = new Color(0xeef3f8);
       this.updateGridColors(0x9fb7cf, 0xc8d8e6);
+    } else {
+      this.scene.background = new Color(0x0b1016);
+      this.updateGridColors(0x4e6f94, 0x3a5470);
+    }
+
+    this.updateLighting();
+    this.refreshRobotAppearance();
+    this.updatePlannedTrajectoryAppearance();
+  }
+
+  setPlannedTrajectoryVisible(visible: boolean): void {
+    this.plannedTrajectoryVisible = visible;
+    this.updatePlannedTrajectoryVisibility();
+  }
+
+  setPlannedTrajectoryPath(points: ReadonlyArray<Vector3>): void {
+    this.clearPlannedTrajectory();
+
+    if (points.length < 2) {
       return;
     }
 
-    this.scene.background = new Color(0x0b1016);
-    this.updateGridColors(0x4e6f94, 0x3a5470);
+    const positions = new Float32Array(points.length * 3);
+    for (let index = 0; index < points.length; index += 1) {
+      const point = points[index];
+      const offset = index * 3;
+      positions[offset] = point.x;
+      positions[offset + 1] = point.y;
+      positions[offset + 2] = point.z;
+    }
+
+    const geometry = new LineGeometry();
+    geometry.setPositions(positions);
+
+    const material = new LineMaterial({
+      color: this.getPlannedTrajectoryColor(),
+      linewidth: this.getPlannedTrajectoryLineWidth(),
+      transparent: true,
+      opacity: this.getPlannedTrajectoryOpacity(),
+      depthWrite: false,
+      depthTest: false,
+      toneMapped: false
+    });
+    material.resolution.set(
+      Math.max(1, this.container.clientWidth),
+      Math.max(1, this.container.clientHeight)
+    );
+
+    this.plannedTrajectoryLine = new Line2(geometry, material);
+    this.plannedTrajectoryLine.renderOrder = 3;
+    this.plannedTrajectoryLine.frustumCulled = false;
+    this.scene.add(this.plannedTrajectoryLine);
+    this.updatePlannedTrajectoryVisibility();
+  }
+
+  clearPlannedTrajectory(): void {
+    if (!this.plannedTrajectoryLine) {
+      return;
+    }
+
+    this.scene.remove(this.plannedTrajectoryLine);
+    this.plannedTrajectoryLine.geometry.dispose();
+
+    const materials = Array.isArray(this.plannedTrajectoryLine.material)
+      ? this.plannedTrajectoryLine.material
+      : [this.plannedTrajectoryLine.material];
+    for (const material of materials) {
+      if (material instanceof Material) {
+        material.dispose();
+      }
+    }
+
+    this.plannedTrajectoryLine = null;
   }
 
   setFixedFrame(frame: string): void {
@@ -165,11 +320,11 @@ export class SceneManager {
     this.refreshFrameTransforms();
   }
 
-
   setVisibleTfFrames(frames: Iterable<string> | null): void {
     this.visibleTfFrames = frames ? new Set(frames) : null;
     this.refreshFrameTransforms();
   }
+
   getDefaultEndEffectorFrame(): string {
     if (!this.robot) {
       return this.robotBaseFrame;
@@ -234,6 +389,226 @@ export class SceneManager {
     return snapshot;
   }
 
+  getRobotJointConnections(): RobotJointConnection[] {
+    if (!this.robot || !this.robot.joints) {
+      return [];
+    }
+
+    const connections: RobotJointConnection[] = [];
+    for (const [jointKey, joint] of Object.entries<any>(this.robot.joints)) {
+      const parentName = typeof joint?.parent?.urdfName === "string" ? joint.parent.urdfName : "";
+      const childName = this.getJointChildLinkName(joint) || "";
+
+      if (!parentName || !childName) {
+        continue;
+      }
+
+      connections.push({
+        name: typeof joint?.urdfName === "string" && joint.urdfName ? joint.urdfName : jointKey,
+        parent: parentName,
+        child: childName,
+        type: typeof joint?.jointType === "string" ? joint.jointType : ""
+      });
+    }
+
+    connections.sort((left, right) => {
+      const parentCompare = left.parent.localeCompare(right.parent);
+      if (parentCompare !== 0) {
+        return parentCompare;
+      }
+      const childCompare = left.child.localeCompare(right.child);
+      if (childCompare !== 0) {
+        return childCompare;
+      }
+      return left.name.localeCompare(right.name);
+    });
+
+    return connections;
+  }
+
+  getRobotLinkDetail(linkName: string): RobotLinkDetail | null {
+    if (!this.robot || !this.robot.links || !linkName) {
+      return null;
+    }
+
+    const link = this.robot.links[linkName];
+    if (!link) {
+      return null;
+    }
+
+    let parentJoint: string | null = null;
+    const childJoints: string[] = [];
+    for (const [jointKey, joint] of Object.entries<any>(this.robot.joints || {})) {
+      const jointName = typeof joint?.urdfName === "string" && joint.urdfName ? joint.urdfName : jointKey;
+      const parentLinkName = typeof joint?.parent?.urdfName === "string" ? joint.parent.urdfName : "";
+      const childLinkName = this.getJointChildLinkName(joint);
+      if (childLinkName === linkName && !parentJoint) {
+        parentJoint = jointName;
+      }
+      if (parentLinkName === linkName) {
+        childJoints.push(jointName);
+      }
+    }
+    childJoints.sort((left, right) => left.localeCompare(right));
+
+    const linkNode = link.urdfNode as Element | null;
+    const childNodes = linkNode ? Array.from(linkNode.children) : [];
+    const visualNodes = childNodes.filter((node) => node.nodeName.toLowerCase() === "visual");
+    const collisionNodes = childNodes.filter((node) => node.nodeName.toLowerCase() === "collision");
+    const materialNames = Array.from(new Set(
+      visualNodes
+        .map((node) => Array.from(node.children).find((child) => child.nodeName.toLowerCase() === "material")?.getAttribute("name") || "")
+        .filter((name) => !!name)
+    )).sort((left, right) => left.localeCompare(right));
+
+    let mass: number | null = null;
+    let inertialOrigin: RobotTransformDetail | null = null;
+    let inertia: RobotInertiaDetail | null = null;
+    const inertialNode = childNodes.find((node) => node.nodeName.toLowerCase() === "inertial") || null;
+    if (inertialNode) {
+      const inertialChildren = Array.from(inertialNode.children);
+      const massNode = inertialChildren.find((node) => node.nodeName.toLowerCase() === "mass") || null;
+      const originNode = inertialChildren.find((node) => node.nodeName.toLowerCase() === "origin") || null;
+      const inertiaNode = inertialChildren.find((node) => node.nodeName.toLowerCase() === "inertia") || null;
+      mass = this.parseNumberAttribute(massNode, "value");
+      inertialOrigin = this.parseOriginElement(originNode) || { xyz: [0, 0, 0], rpy: [0, 0, 0] };
+      if (inertiaNode) {
+        inertia = {
+          ixx: this.parseNumberAttribute(inertiaNode, "ixx"),
+          ixy: this.parseNumberAttribute(inertiaNode, "ixy"),
+          ixz: this.parseNumberAttribute(inertiaNode, "ixz"),
+          iyy: this.parseNumberAttribute(inertiaNode, "iyy"),
+          iyz: this.parseNumberAttribute(inertiaNode, "iyz"),
+          izz: this.parseNumberAttribute(inertiaNode, "izz")
+        };
+      }
+    }
+
+    const transform = this.getRelativeTransform(linkName);
+    return {
+      name: linkName,
+      parentJoint,
+      childJoints,
+      visualCount: visualNodes.length,
+      collisionCount: collisionNodes.length,
+      materialNames,
+      mass,
+      inertialOrigin,
+      inertia,
+      pose: transform ? this.toTransformDetailFromPose(transform.translation, transform.rotation) : null
+    };
+  }
+
+  getRobotJointDetail(jointName: string): RobotJointDetail | null {
+    if (!this.robot || !this.robot.joints || !jointName) {
+      return null;
+    }
+
+    const joint = this.robot.joints[jointName];
+    if (!joint) {
+      return null;
+    }
+
+    const jointNode = joint.urdfNode as Element | null;
+    const childNodes = jointNode ? Array.from(jointNode.children) : [];
+    const originNode = childNodes.find((node) => node.nodeName.toLowerCase() === "origin") || null;
+    const limitNode = childNodes.find((node) => node.nodeName.toLowerCase() === "limit") || null;
+    const dynamicsNode = childNodes.find((node) => node.nodeName.toLowerCase() === "dynamics") || null;
+    const mimicNode = childNodes.find((node) => node.nodeName.toLowerCase() === "mimic") || null;
+    const axis = joint.axis
+      ? [joint.axis.x, joint.axis.y, joint.axis.z] as [number, number, number]
+      : null;
+
+    return {
+      name: typeof joint?.urdfName === "string" && joint.urdfName ? joint.urdfName : jointName,
+      type: typeof joint?.jointType === "string" ? joint.jointType : "",
+      parentLink: typeof joint?.parent?.urdfName === "string" ? joint.parent.urdfName : null,
+      childLink: this.getJointChildLinkName(joint),
+      axis,
+      origin: this.parseOriginElement(originNode) || { xyz: [0, 0, 0], rpy: [0, 0, 0] },
+      limit: limitNode ? {
+        lower: this.parseNumberAttribute(limitNode, "lower"),
+        upper: this.parseNumberAttribute(limitNode, "upper"),
+        effort: this.parseNumberAttribute(limitNode, "effort"),
+        velocity: this.parseNumberAttribute(limitNode, "velocity")
+      } : null,
+      dynamics: dynamicsNode ? {
+        damping: this.parseNumberAttribute(dynamicsNode, "damping"),
+        friction: this.parseNumberAttribute(dynamicsNode, "friction")
+      } : null,
+      mimic: mimicNode ? {
+        joint: mimicNode.getAttribute("joint") || "",
+        multiplier: this.parseNumberAttribute(mimicNode, "multiplier"),
+        offset: this.parseNumberAttribute(mimicNode, "offset")
+      } : null,
+      currentValue: Array.isArray(joint.jointValue)
+        ? joint.jointValue.filter((value: unknown): value is number => typeof value === "number" && Number.isFinite(value))
+        : []
+    };
+  }
+
+  private getJointChildLinkName(joint: any): string | null {
+    const childLink = Array.isArray(joint?.children)
+      ? joint.children.find((child: any) => child && (child.isURDFLink === true || child.type === "URDFLink"))
+      : null;
+    return typeof childLink?.urdfName === "string" ? childLink.urdfName : null;
+  }
+
+  private toTransformDetailFromPose(translation: Vector3, rotation: Quaternion): RobotTransformDetail {
+    const euler = new Euler().setFromQuaternion(rotation, "XYZ");
+    return {
+      xyz: [translation.x, translation.y, translation.z],
+      rpy: [euler.x, euler.y, euler.z]
+    };
+  }
+
+  private parseOriginElement(node: Element | null | undefined): RobotTransformDetail | null {
+    if (!node) {
+      return null;
+    }
+
+    return {
+      xyz: this.parseTripleAttribute(node, "xyz", [0, 0, 0]),
+      rpy: this.parseTripleAttribute(node, "rpy", [0, 0, 0])
+    };
+  }
+
+  private parseTripleAttribute(
+    node: Element | null | undefined,
+    attribute: string,
+    fallback: [number, number, number]
+  ): [number, number, number] {
+    if (!node) {
+      return [...fallback] as [number, number, number];
+    }
+
+    const raw = node.getAttribute(attribute);
+    if (!raw) {
+      return [...fallback] as [number, number, number];
+    }
+
+    const parts = raw.trim().split(/\s+/g).map((value) => Number(value));
+    if (parts.length < 3 || parts.slice(0, 3).some((value) => !Number.isFinite(value))) {
+      return [...fallback] as [number, number, number];
+    }
+
+    return [parts[0], parts[1], parts[2]];
+  }
+
+  private parseNumberAttribute(node: Element | null | undefined, attribute: string): number | null {
+    if (!node) {
+      return null;
+    }
+
+    const raw = node.getAttribute(attribute);
+    if (raw == null || raw === "") {
+      return null;
+    }
+
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : null;
+  }
+
   clearTfRecords(): void {
     this.tfRecords.clear();
     for (const axis of this.tfAxes.values()) {
@@ -277,6 +652,7 @@ export class SceneManager {
     }
     axis.visible = this.showOnlyEndEffector;
   }
+
   private getRobotFrameObject(frame: string): any | null {
     if (!this.robot || !frame) {
       return null;
@@ -300,6 +676,7 @@ export class SceneManager {
 
     return null;
   }
+
   getRelativeTransform(frame: string): { translation: Vector3; rotation: Quaternion } | null {
     const cache = new Map<string, Matrix4 | null>();
     const relative = this.computeRelativeMatrix(frame, cache);
@@ -311,6 +688,10 @@ export class SceneManager {
       return { translation: position, rotation };
     }
 
+    return this.getRobotRelativeTransform(frame);
+  }
+
+  getRobotRelativeTransform(frame: string): { translation: Vector3; rotation: Quaternion } | null {
     const frameObject = this.getRobotFrameObject(frame);
     if (!frameObject || !this.robot) {
       return null;
@@ -327,13 +708,20 @@ export class SceneManager {
 
   setRobot(robot: any, baseFrame = "base_link"): void {
     if (this.robot) {
+      this.cleanupRobotAppearance(this.robot);
       this.robotLayer.remove(this.robot);
     }
 
     this.robot = robot;
     this.robotBaseFrame = baseFrame || "base_link";
 
-    if (this.robot) {      this.robotLayer.add(this.robot);    }    this.attachEndEffectorAxis();    this.refreshFrameTransforms();
+    if (this.robot) {
+      this.robotLayer.add(this.robot);
+      this.styleRobotAppearance();
+    }
+
+    this.attachEndEffectorAxis();
+    this.refreshFrameTransforms();
   }
 
   updateJointStates(message: unknown): void {
@@ -456,6 +844,11 @@ export class SceneManager {
       this.pointCloud = null;
     }
 
+    if (this.robot) {
+      this.cleanupRobotAppearance(this.robot);
+    }
+
+    this.clearPlannedTrajectory();
     this.pointCloudMaterial.dispose();
     this.renderer.dispose();
     this.container.removeChild(this.renderer.domElement);
@@ -470,11 +863,11 @@ export class SceneManager {
         continue;
       }
 
-
       if (this.visibleTfFrames !== null && !this.visibleTfFrames.has(frame)) {
         axis.visible = false;
         continue;
       }
+
       const relative = this.computeRelativeMatrix(frame, cache);
       axis.visible = relative !== null;
       if (relative) {
@@ -507,6 +900,7 @@ export class SceneManager {
       }
     }
   }
+
   private computeRelativeMatrix(frame: string, cache: Map<string, Matrix4 | null>): Matrix4 | null {
     const fixedMatrix = this.computeAbsoluteMatrix(this.fixedFrame, cache, new Set());
     const frameMatrix = this.computeAbsoluteMatrix(frame, cache, new Set());
@@ -579,12 +973,306 @@ export class SceneManager {
     }
   }
 
+  private updateLighting(): void {
+    if (this.currentTheme === "light") {
+      this.ambientLight.color.setHex(0xffffff);
+      this.ambientLight.intensity = 0.86;
+      this.keyLight.color.setHex(0xfff3dc);
+      this.keyLight.intensity = 0.88;
+      this.fillLight.color.setHex(0xdce8f7);
+      this.fillLight.intensity = 0.30;
+      return;
+    }
+
+    this.ambientLight.color.setHex(0xe9f0fb);
+    this.ambientLight.intensity = 0.66;
+    this.keyLight.color.setHex(0xfff0d0);
+    this.keyLight.intensity = 1.05;
+    this.fillLight.color.setHex(0xcddcf1);
+    this.fillLight.intensity = 0.36;
+  }
+
+  private styleRobotAppearance(): void {
+    if (!this.robot) {
+      return;
+    }
+
+    this.robot.traverse((object: any) => {
+      if (!(object instanceof Mesh)) {
+        return;
+      }
+
+      const role = this.getRobotPartRole(object);
+      object.userData.__webRvizMaterialRole = role;
+      object.material = this.ensureStyledMaterials(object.material);
+      this.applyMaterialPreset(object.material, role);
+      this.ensureEdgeHelper(object);
+    });
+
+    this.updateRobotEdgeAppearance();
+  }
+
+  private refreshRobotAppearance(): void {
+    if (!this.robot) {
+      return;
+    }
+
+    this.robot.traverse((object: any) => {
+      if (!(object instanceof Mesh)) {
+        return;
+      }
+
+      const role = (object.userData.__webRvizMaterialRole as RobotPartRole | undefined) ?? this.getRobotPartRole(object);
+      object.userData.__webRvizMaterialRole = role;
+      this.applyMaterialPreset(object.material, role);
+    });
+
+    this.updateRobotEdgeAppearance();
+  }
+
+  private ensureStyledMaterials(material: Material | Material[]): Material | Material[] {
+    if (Array.isArray(material)) {
+      return material.map((entry) => this.ensureStyledMaterial(entry));
+    }
+    return this.ensureStyledMaterial(material);
+  }
+
+  private ensureStyledMaterial(material: Material): MeshStandardMaterial {
+    if (material instanceof MeshStandardMaterial && material.userData.__webRvizStyledMaterial) {
+      return material;
+    }
+
+    const baseMaterial = material instanceof MeshStandardMaterial ? material.clone() : new MeshStandardMaterial();
+    const source = material as Material & {
+      color?: Color;
+      map?: MeshStandardMaterial["map"];
+      transparent?: boolean;
+      opacity?: number;
+      side?: number;
+    };
+
+    if (!(baseMaterial instanceof MeshStandardMaterial)) {
+      return new MeshStandardMaterial();
+    }
+
+    baseMaterial.color.copy(source.color ?? new Color(0xb8b8b8));
+    baseMaterial.map = source.map ?? null;
+    baseMaterial.transparent = source.transparent ?? false;
+    baseMaterial.opacity = source.opacity ?? 1;
+    baseMaterial.side = source.side ?? baseMaterial.side;
+    baseMaterial.flatShading = false;
+    baseMaterial.userData.__webRvizStyledMaterial = true;
+    return baseMaterial;
+  }
+
+  private applyMaterialPreset(material: Material | Material[], role: RobotPartRole): void {
+    const preset = this.getMaterialPreset(role);
+    const materials = Array.isArray(material) ? material : [material];
+
+    for (const entry of materials) {
+      if (!(entry instanceof MeshStandardMaterial)) {
+        continue;
+      }
+      entry.color.setHex(preset.color);
+      entry.metalness = preset.metalness;
+      entry.roughness = preset.roughness;
+      entry.needsUpdate = true;
+    }
+  }
+
+  private getMaterialPreset(role: RobotPartRole): { color: number; metalness: number; roughness: number } {
+    if (this.currentTheme === "light") {
+      switch (role) {
+        case "joint":
+          return { color: 0x8e95a3, metalness: 0.3, roughness: 0.5 };
+        case "tool":
+          return { color: 0x5b6675, metalness: 0.28, roughness: 0.56 };
+        case "cable":
+          return { color: 0x4f5661, metalness: 0.06, roughness: 0.82 };
+        case "accent":
+          return { color: 0x97996d, metalness: 0.24, roughness: 0.62 };
+        case "body":
+        default:
+          return { color: 0xb1ae75, metalness: 0.24, roughness: 0.64 };
+      }
+    }
+
+    switch (role) {
+      case "joint":
+        return { color: 0xaeb1bc, metalness: 0.34, roughness: 0.46 };
+      case "tool":
+        return { color: 0x79808b, metalness: 0.31, roughness: 0.52 };
+      case "cable":
+        return { color: 0x5e6470, metalness: 0.08, roughness: 0.8 };
+      case "accent":
+        return { color: 0xa0a271, metalness: 0.26, roughness: 0.58 };
+      case "body":
+      default:
+        return { color: 0xc8c697, metalness: 0.28, roughness: 0.6 };
+    }
+  }
+
+  private getRobotPartRole(mesh: Mesh): RobotPartRole {
+    const names = [mesh.name, mesh.parent?.name ?? "", mesh.parent?.parent?.name ?? ""]
+      .join(" ")
+      .toLowerCase();
+
+    if (/(tool|tcp|gripper|flange|wrist|ee|end)/.test(names)) {
+      return "tool";
+    }
+    if (/(joint|motor|gear|bearing|axis)/.test(names)) {
+      return "joint";
+    }
+    if (/(cable|wire|hose)/.test(names)) {
+      return "cable";
+    }
+    if (/(base|pedestal|mount)/.test(names)) {
+      return "accent";
+    }
+    return "body";
+  }
+
+  private ensureEdgeHelper(mesh: Mesh): void {
+    const existingEdge = mesh.children.find((child) => child.userData.__webRvizEdgeHelper === true) as LineSegments | undefined;
+    if (existingEdge) {
+      return;
+    }
+
+    const edgeGeometry = new EdgesGeometry(mesh.geometry, 30);
+    const edgeMaterial = new LineBasicMaterial({
+      color: this.getEdgeColor(),
+      transparent: true,
+      opacity: this.getEdgeOpacity(),
+      depthWrite: false,
+      toneMapped: false
+    });
+
+    const edgeLines = new LineSegments(edgeGeometry, edgeMaterial);
+    edgeLines.userData.__webRvizEdgeHelper = true;
+    edgeLines.renderOrder = 2;
+    mesh.add(edgeLines);
+  }
+
+  private updateRobotEdgeAppearance(): void {
+    if (!this.robot) {
+      return;
+    }
+
+    const color = this.getEdgeColor();
+    const opacity = this.getEdgeOpacity();
+
+    this.robot.traverse((object: any) => {
+      if (object.userData.__webRvizEdgeHelper !== true) {
+        return;
+      }
+
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const entry of materials) {
+        if (!(entry instanceof LineBasicMaterial)) {
+          continue;
+        }
+        entry.color.setHex(color);
+        entry.opacity = opacity;
+        entry.needsUpdate = true;
+      }
+    });
+  }
+
+  private getEdgeColor(): number {
+    return this.currentTheme === "light" ? 0x6b84a3 : 0x90b8da;
+  }
+
+  private getEdgeOpacity(): number {
+    return this.currentTheme === "light" ? 0.24 : 0.28;
+  }
+
+  private updatePlannedTrajectoryAppearance(): void {
+    if (!this.plannedTrajectoryLine) {
+      return;
+    }
+
+    const materials = Array.isArray(this.plannedTrajectoryLine.material)
+      ? this.plannedTrajectoryLine.material
+      : [this.plannedTrajectoryLine.material];
+    for (const material of materials) {
+      if (!(material instanceof LineMaterial)) {
+        continue;
+      }
+      material.color.setHex(this.getPlannedTrajectoryColor());
+      material.opacity = this.getPlannedTrajectoryOpacity();
+      material.linewidth = this.getPlannedTrajectoryLineWidth();
+      material.needsUpdate = true;
+    }
+  }
+
+  private updatePlannedTrajectoryVisibility(): void {
+    if (this.plannedTrajectoryLine) {
+      this.plannedTrajectoryLine.visible = this.plannedTrajectoryVisible;
+    }
+  }
+
+  private getPlannedTrajectoryColor(): number {
+    return this.currentTheme === "light" ? 0x1178c7 : 0x62d99f;
+  }
+
+  private getPlannedTrajectoryOpacity(): number {
+    return this.currentTheme === "light" ? 0.88 : 0.92;
+  }
+
+  private getPlannedTrajectoryLineWidth(): number {
+    return 1.25;
+  }
+
+  private cleanupRobotAppearance(root: Group): void {
+    root.traverse((object: any) => {
+      if (object instanceof Mesh) {
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        for (const entry of materials) {
+          if (entry instanceof MeshStandardMaterial && entry.userData.__webRvizStyledMaterial) {
+            entry.dispose();
+          }
+        }
+      }
+
+      const edgeChildren = object.children.filter((child: any) => child.userData.__webRvizEdgeHelper === true);
+      for (const child of edgeChildren) {
+        object.remove(child);
+        if (child instanceof LineSegments) {
+          child.geometry.dispose();
+          const materials = Array.isArray(child.material) ? child.material : [child.material];
+          for (const entry of materials) {
+            if (entry instanceof LineBasicMaterial) {
+              entry.dispose();
+            }
+          }
+        }
+      }
+    });
+  }
+
   private onResize(): void {
     const width = Math.max(1, this.container.clientWidth);
     const height = Math.max(1, this.container.clientHeight);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
+    this.updatePlannedTrajectoryResolution(width, height);
+  }
+
+  private updatePlannedTrajectoryResolution(width: number, height: number): void {
+    if (!this.plannedTrajectoryLine) {
+      return;
+    }
+
+    const materials = Array.isArray(this.plannedTrajectoryLine.material)
+      ? this.plannedTrajectoryLine.material
+      : [this.plannedTrajectoryLine.material];
+    for (const material of materials) {
+      if (!(material instanceof LineMaterial)) {
+        continue;
+      }
+      material.resolution.set(width, height);
+    }
   }
 
   private loop(timestamp: number): void {
@@ -598,15 +1286,4 @@ export class SceneManager {
     window.requestAnimationFrame(this.loop);
   }
 }
-
-
-
-
-
-
-
-
-
-
-
 

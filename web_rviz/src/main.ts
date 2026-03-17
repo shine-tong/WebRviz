@@ -1,10 +1,11 @@
 ﻿import "./style.css";
+import { Vector3 } from "three";
 import { RuntimeConfig, loadConfig, saveConfig } from "./config";
 import { decodePointCloud2 } from "./ros/pointcloud";
 import { ConnectionState, MessageDetailsResponse, MessageTypeDef, RosClient, ServiceInfo, TopicInfo } from "./ros/rosClient";
 import { loadRvizSyncHints } from "./rviz/rvizConfig";
 import { loadRobotModel } from "./visualization/robotLoader";
-import { SceneManager } from "./visualization/sceneManager";
+import { RobotJointConnection, RobotJointDetail, RobotLinkDetail, SceneManager } from "./visualization/sceneManager";
 import { applyStaticTranslations, applyTheme, Language, loadLanguage, loadTheme, saveLanguage, saveTheme, t, ThemeMode } from "./uiSettings";
 import { enhanceSelect, refreshEnhancedSelect } from "./customSelect";
 
@@ -20,6 +21,7 @@ interface AppElements {
   connectBtn: HTMLButtonElement;
   syncBtn: HTMLButtonElement;
   sidebarToggleBtn: HTMLButtonElement;
+  plannedTrajectoryToggleBtn: HTMLButtonElement;
   rightSidebarToggleBtn: HTMLButtonElement;
   fixedFrameValue: HTMLElement;
   connectionStatus: HTMLElement;
@@ -61,6 +63,7 @@ interface TopicSubscriptions {
   pointCloud?: any;
   moveGroupGoal?: any;
   moveGroupResult?: any;
+  displayTrajectory?: any;
   executeTrajectoryGoal?: any;
   executeTrajectoryResult?: any;
 }
@@ -82,9 +85,39 @@ interface LogEntry {
   kind: "default" | "moveit";
 }
 
+interface PlannedTrajectoryRestoreState {
+  names: string[];
+  positions: number[];
+}
+
+interface PlannedTrajectoryPayload {
+  jointNames: string[];
+  points: Array<{ positions?: number[] }>;
+  source: "result" | "display";
+  targetFrame: string;
+  restoreState?: PlannedTrajectoryRestoreState;
+}
+
+
+interface TfTreeGraph {
+  roots: string[];
+  childrenByParent: Map<string, string[]>;
+}
+
+interface DetailField {
+  label: string;
+  value: string;
+}
+
+interface DetailSection {
+  title: string;
+  fields: DetailField[];
+}
+
 const POINTCLOUD2_TYPE = "sensor_msgs/PointCloud2";
 const MOVE_GROUP_GOAL_TOPIC = "/move_group/goal";
 const MOVE_GROUP_RESULT_TOPIC = "/move_group/result";
+const DISPLAY_TRAJECTORY_TOPICS = ["/move_group/display_planned_path", "/display_planned_path"] as const;
 const EXECUTE_TRAJECTORY_GOAL_TOPIC = "/execute_trajectory/goal";
 const EXECUTE_TRAJECTORY_RESULT_TOPIC = "/execute_trajectory/result";
 const SIDEBAR_STATE_KEY = "webrviz-sidebar-collapsed";
@@ -92,11 +125,13 @@ const RIGHT_SIDEBAR_STATE_KEY = "webrviz-right-sidebar-collapsed";
 const TRAJ_SAMPLE_INTERVAL_MS = 50;
 const TRAJ_MOTION_THRESHOLD = 0.001;
 const TRAJ_IDLE_STOP_MS = 800;
+const MAX_PLANNED_TRAJECTORY_SAMPLES = 180;
 const TRAJ_ICON_RECORD = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/></svg>';
 const TRAJ_ICON_STOP = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10"/></svg>';
 const TRAJ_ICON_PLAY = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
 const TRAJ_ICON_PAUSE = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>';
 const TRAJ_ICON_CLEAR = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke-width="2" stroke-linecap="round"/></svg>';
+const TRAJ_ICON_PLAN_PATH = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 17a2 2 0 1 0 0.001 0zM12 7a2 2 0 1 0 0.001 0zM18 15a2 2 0 1 0 0.001 0z"/><path d="M7.8 15.9l2.4-6.2M13.7 8.4l2.7 5.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 function getElements(): AppElements {
   const byId = <T extends HTMLElement>(id: string): T => {
@@ -119,6 +154,7 @@ function getElements(): AppElements {
     connectBtn: byId<HTMLButtonElement>("connectBtn"),
     syncBtn: byId<HTMLButtonElement>("syncBtn"),
     sidebarToggleBtn: byId<HTMLButtonElement>("sidebarToggleBtn"),
+    plannedTrajectoryToggleBtn: byId<HTMLButtonElement>("plannedTrajectoryToggleBtn"),
     rightSidebarToggleBtn: byId<HTMLButtonElement>("rightSidebarToggleBtn"),
     fixedFrameValue: byId<HTMLElement>("fixedFrameValue"),
     connectionStatus: byId<HTMLElement>("connectionStatus"),
@@ -165,6 +201,10 @@ let topics: TopicInfo[] = [];
 let logEntries: LogEntry[] = [];
 let subscriptions: TopicSubscriptions = {};
 let lastPointCloudTimestamp = 0;
+let plannedTrajectoryVisible = true;
+let latestPlannedTrajectory: PlannedTrajectoryPayload | null = null;
+let pendingPlannedTrajectory: PlannedTrajectoryPayload | null = null;
+let moveItPreviewArmed = false;
 let sidebarCollapsed = window.localStorage.getItem(SIDEBAR_STATE_KEY) === "1";
 let rightSidebarCollapsed = window.localStorage.getItem(RIGHT_SIDEBAR_STATE_KEY) !== "0";
 let jointState: JointSnapshot[] = [];
@@ -175,6 +215,7 @@ let lastNonSelectionTfVisibilityMode: Exclude<TfVisibilityMode, "selection"> = "
 let selectedTfFrames = new Set<string>();
 let tfFilterMenuOpen = false;
 let pendingRightPanelUpdate = false;
+let lastTfTreeRenderSignature = "";
 let trajectory: TrajectoryFrame[] = [];
 let isRecording = false;
 let isPlaying = false;
@@ -269,6 +310,15 @@ function updateSidebarToggleUi(): void {
   elements.sidebarToggleBtn.setAttribute("aria-label", elements.sidebarToggleBtn.textContent);
 }
 
+function updatePlannedTrajectoryToggleUi(): void {
+  const toggleKey = plannedTrajectoryVisible ? "button.hidePlannedTrajectory" : "button.showPlannedTrajectory";
+  const label = t(currentLanguage, toggleKey as "button.hidePlannedTrajectory" | "button.showPlannedTrajectory");
+  elements.plannedTrajectoryToggleBtn.title = label;
+  elements.plannedTrajectoryToggleBtn.setAttribute("aria-label", label);
+  elements.plannedTrajectoryToggleBtn.setAttribute("aria-pressed", plannedTrajectoryVisible ? "true" : "false");
+  elements.plannedTrajectoryToggleBtn.classList.toggle("is-active", plannedTrajectoryVisible);
+}
+
 function updateRightSidebarToggleUi(): void {
   elements.rightSidebarToggleBtn.textContent = rightSidebarCollapsed ? "<" : ">";
   elements.rightSidebarToggleBtn.setAttribute(
@@ -288,6 +338,7 @@ function refreshUiText(): void {
   updateThemeToggleUi();
   updateConnectButtonText();
   updateSidebarToggleUi();
+  updatePlannedTrajectoryToggleUi();
   updateRightSidebarToggleUi();
   updateTabLabels();
   updateStatusLabel(lastConnectionState, lastConnectionDetail);
@@ -386,29 +437,305 @@ function formatSecondsValue(value: unknown, digits = 2): string | null {
   return value.toFixed(digits) + "s";
 }
 
+function isMoveItPlanSuccessful(statusCode: number, errorCode?: number): boolean {
+  if (typeof errorCode === "number") {
+    return errorCode === 1;
+  }
+  return statusCode === 3;
+}
+
+function toPlannedTrajectoryRestoreState(
+  snapshot: { name?: unknown; position?: unknown } | undefined
+): PlannedTrajectoryRestoreState | undefined {
+  if (!snapshot || !Array.isArray(snapshot.name) || !Array.isArray(snapshot.position)) {
+    return undefined;
+  }
+
+  const names: string[] = [];
+  const positions: number[] = [];
+  const count = Math.min(snapshot.name.length, snapshot.position.length);
+  for (let index = 0; index < count; index += 1) {
+    const name = snapshot.name[index];
+    const position = snapshot.position[index];
+    if (typeof name === "string" && name.length > 0 && typeof position === "number" && Number.isFinite(position)) {
+      names.push(name);
+      positions.push(position);
+    }
+  }
+
+  if (names.length === 0 || positions.length === 0) {
+    return undefined;
+  }
+
+  return { names, positions };
+}
+
+function clearPlannedTrajectoryState(): void {
+  latestPlannedTrajectory = null;
+  pendingPlannedTrajectory = null;
+  sceneManager.clearPlannedTrajectory();
+}
+
+function buildPlannedTrajectoryPathForFrame(
+  jointNames: string[],
+  points: Array<{ positions?: number[] }>,
+  targetFrame: string,
+  fallbackRestoreState?: PlannedTrajectoryRestoreState
+): Vector3[] {
+  if (jointNames.length === 0 || points.length < 2 || !targetFrame) {
+    return [];
+  }
+
+  const restoreState = jointState.length > 0
+    ? {
+        names: jointState.map((joint) => joint.name),
+        positions: jointState.map((joint) => joint.position)
+      }
+    : fallbackRestoreState;
+
+  if (!restoreState || restoreState.names.length === 0 || restoreState.positions.length === 0) {
+    return [];
+  }
+
+  const sampledIndices = new Set<number>([0, points.length - 1]);
+  const stride = Math.max(1, Math.ceil(points.length / MAX_PLANNED_TRAJECTORY_SAMPLES));
+  for (let index = 0; index < points.length; index += stride) {
+    sampledIndices.add(index);
+  }
+
+  const orderedIndices = Array.from(sampledIndices).sort((left, right) => left - right);
+  const path: Vector3[] = [];
+
+  try {
+    for (const index of orderedIndices) {
+      const positions = points[index]?.positions;
+      if (!Array.isArray(positions) || positions.length < jointNames.length) {
+        continue;
+      }
+
+      sceneManager.updateJointStates({
+        name: jointNames,
+        position: positions.slice(0, jointNames.length)
+      });
+
+      const pose = sceneManager.getRobotRelativeTransform(targetFrame);
+      if (!pose) {
+        continue;
+      }
+
+      const translation = pose.translation.clone();
+      const lastPoint = path[path.length - 1];
+      if (!lastPoint || lastPoint.distanceToSquared(translation) > 1e-10) {
+        path.push(translation);
+      }
+    }
+  } finally {
+    sceneManager.updateJointStates({
+      name: restoreState.names,
+      position: restoreState.positions
+    });
+    scheduleRightPanelUpdate();
+  }
+
+  return path;
+}
+
+function getCurrentTcpLinkFrame(): string {
+  const directValue = elements.cartesianFrame.value.trim();
+  if (directValue) {
+    return directValue;
+  }
+
+  const rememberedValue = cartesianFrame.trim();
+  if (rememberedValue) {
+    return rememberedValue;
+  }
+
+  const frames = sceneManager.getLinkList();
+  if (frames.length === 0) {
+    return "";
+  }
+
+  const preferred = sceneManager.getDefaultEndEffectorFrame();
+  if (preferred && frames.includes(preferred)) {
+    return preferred;
+  }
+
+  return frames[frames.length - 1];
+}
+
+function buildPlannedTrajectoryPreview(payload: PlannedTrajectoryPayload): { path: Vector3[]; frame: string } | null {
+  if (!payload.targetFrame) {
+    return null;
+  }
+
+  const path = buildPlannedTrajectoryPathForFrame(
+    payload.jointNames,
+    payload.points,
+    payload.targetFrame,
+    payload.restoreState
+  );
+
+  if (path.length < 2) {
+    return null;
+  }
+
+  return { path, frame: payload.targetFrame };
+}
+
+function tryRenderPlannedTrajectory(payload: PlannedTrajectoryPayload, logSuccess = true): boolean {
+  const preview = buildPlannedTrajectoryPreview(payload);
+  if (!preview) {
+    return false;
+  }
+
+  pendingPlannedTrajectory = null;
+  sceneManager.setPlannedTrajectoryPath(preview.path);
+  sceneManager.setPlannedTrajectoryVisible(plannedTrajectoryVisible);
+  if (logSuccess) {
+    logMoveIt(
+      "planned trajectory visualized | source=" + payload.source +
+      " | points=" + String(preview.path.length) +
+      " | frame=" + preview.frame
+    );
+  }
+  return true;
+}
+
+function retryPendingPlannedTrajectory(): void {
+  if (!pendingPlannedTrajectory) {
+    return;
+  }
+  tryRenderPlannedTrajectory(pendingPlannedTrajectory);
+}
+
+function refreshLatestPlannedTrajectoryPreview(): void {
+  if (!latestPlannedTrajectory) {
+    return;
+  }
+  if (!tryRenderPlannedTrajectory(latestPlannedTrajectory, false)) {
+    pendingPlannedTrajectory = latestPlannedTrajectory;
+  }
+}
+
+function queuePlannedTrajectoryFromJointTrajectory(
+  jointTrajectory:
+    | {
+        joint_names?: string[];
+        points?: Array<{ positions?: number[] }>;
+      }
+    | undefined,
+  source: "result" | "display",
+  restoreState?: PlannedTrajectoryRestoreState
+): void {
+  const jointNames = Array.isArray(jointTrajectory?.joint_names)
+    ? jointTrajectory.joint_names.filter((name): name is string => typeof name === "string" && name.length > 0)
+    : [];
+  const points = Array.isArray(jointTrajectory?.points) ? jointTrajectory.points : [];
+
+  if (jointNames.length === 0 || points.length < 2) {
+    return;
+  }
+
+  const payload: PlannedTrajectoryPayload = {
+    jointNames,
+    points,
+    source,
+    targetFrame: getCurrentTcpLinkFrame(),
+    restoreState
+  };
+  latestPlannedTrajectory = payload;
+  pendingPlannedTrajectory = payload;
+
+  if (!tryRenderPlannedTrajectory(payload)) {
+    logMoveIt("planned trajectory preview pending scene sync | source=" + source);
+  }
+}
+
+function updatePlannedTrajectoryFromMoveItResult(resultMessage: {
+  status?: { status?: number };
+  result?: {
+    error_code?: { val?: number };
+    planned_trajectory?: {
+      joint_trajectory?: {
+        joint_names?: string[];
+        points?: Array<{ positions?: number[] }>;
+      };
+    };
+  };
+}): void {
+  const statusCode = typeof resultMessage.status?.status === "number" ? resultMessage.status.status : -1;
+  const errorCode = typeof resultMessage.result?.error_code?.val === "number" ? resultMessage.result.error_code.val : undefined;
+
+  if (!isMoveItPlanSuccessful(statusCode, errorCode)) {
+    clearPlannedTrajectoryState();
+    return;
+  }
+
+  queuePlannedTrajectoryFromJointTrajectory(resultMessage.result?.planned_trajectory?.joint_trajectory, "result");
+}
+
+function updatePlannedTrajectoryFromDisplayTrajectory(message: {
+  trajectory_start?: {
+    joint_state?: {
+      name?: string[];
+      position?: number[];
+    };
+  };
+  trajectory?: Array<{
+    joint_trajectory?: {
+      joint_names?: string[];
+      points?: Array<{ positions?: number[] }>;
+    };
+  }>;
+}): void {
+  const restoreState = toPlannedTrajectoryRestoreState(message.trajectory_start?.joint_state);
+  const trajectories = Array.isArray(message.trajectory) ? message.trajectory : [];
+  for (let index = trajectories.length - 1; index >= 0; index -= 1) {
+    const jointTrajectory = trajectories[index]?.joint_trajectory;
+    const pointCount = Array.isArray(jointTrajectory?.points) ? jointTrajectory.points.length : 0;
+    if (pointCount >= 2) {
+      queuePlannedTrajectoryFromJointTrajectory(jointTrajectory, "display", restoreState);
+      return;
+    }
+  }
+}
+function findDisplayTrajectoryTopicInfo(): TopicInfo | undefined {
+  for (const topicName of DISPLAY_TRAJECTORY_TOPICS) {
+    const info = findTopicInfo(topicName);
+    if (info) {
+      return info;
+    }
+  }
+
+  return topics.find((topic) => /(^|\/)DisplayTrajectory$/.test(topic.type));
+}
+
 function subscribeMoveItTopics(): void {
   unsubscribe(subscriptions.moveGroupGoal);
   unsubscribe(subscriptions.moveGroupResult);
+  unsubscribe(subscriptions.displayTrajectory);
   unsubscribe(subscriptions.executeTrajectoryGoal);
   unsubscribe(subscriptions.executeTrajectoryResult);
   subscriptions.moveGroupGoal = undefined;
   subscriptions.moveGroupResult = undefined;
+  subscriptions.displayTrajectory = undefined;
   subscriptions.executeTrajectoryGoal = undefined;
   subscriptions.executeTrajectoryResult = undefined;
 
   const subscribed: string[] = [];
 
-  const subscribeIfAvailable = (
-    topicName: string,
+  const subscribeResolvedTopic = (
+    info: TopicInfo | undefined,
     fallbackType: string,
     assign: (topic: any) => void,
     onMessage: (message: unknown) => void
   ): void => {
-    const info = findTopicInfo(topicName);
     if (!info) {
       return;
     }
 
+    const topicName = info.name;
     const topicType = info.type || fallbackType;
     try {
       const topic = rosClient.createTopic(topicName, topicType);
@@ -418,6 +745,15 @@ function subscribeMoveItTopics(): void {
     } catch (error) {
       logMoveIt("monitor skipped " + topicName + ": " + formatError(error));
     }
+  };
+
+  const subscribeIfAvailable = (
+    topicName: string,
+    fallbackType: string,
+    assign: (topic: any) => void,
+    onMessage: (message: unknown) => void
+  ): void => {
+    subscribeResolvedTopic(findTopicInfo(topicName), fallbackType, assign, onMessage);
   };
 
   subscribeIfAvailable(MOVE_GROUP_GOAL_TOPIC, "moveit_msgs/MoveGroupActionGoal", (topic) => {
@@ -459,17 +795,28 @@ function subscribeMoveItTopics(): void {
       parts.push("plan_only=true");
     }
 
+    moveItPreviewArmed = true;
+    clearPlannedTrajectoryState();
     logMoveIt(parts.join(" | "));
   });
 
   subscribeIfAvailable(MOVE_GROUP_RESULT_TOPIC, "moveit_msgs/MoveGroupActionResult", (topic) => {
     subscriptions.moveGroupResult = topic;
   }, (message) => {
+    if (!moveItPreviewArmed) {
+      return;
+    }
     const resultMessage = message as {
       status?: { status?: number };
       result?: {
         planning_time?: number;
         error_code?: { val?: number };
+        planned_trajectory?: {
+          joint_trajectory?: {
+            joint_names?: string[];
+            points?: Array<{ positions?: number[] }>;
+          };
+        };
       };
     };
 
@@ -488,7 +835,24 @@ function subscribeMoveItTopics(): void {
       parts.push("error_code=" + String(resultMessage.result.error_code.val));
     }
 
+    updatePlannedTrajectoryFromMoveItResult(resultMessage);
     logMoveIt(parts.join(" | "));
+  });
+
+  subscribeResolvedTopic(findDisplayTrajectoryTopicInfo(), "moveit_msgs/DisplayTrajectory", (topic) => {
+    subscriptions.displayTrajectory = topic;
+  }, (message) => {
+    if (!moveItPreviewArmed) {
+      return;
+    }
+    updatePlannedTrajectoryFromDisplayTrajectory(message as {
+      trajectory?: Array<{
+        joint_trajectory?: {
+          joint_names?: string[];
+          points?: Array<{ positions?: number[] }>;
+        };
+      }>;
+    });
   });
 
   subscribeIfAvailable(EXECUTE_TRAJECTORY_GOAL_TOPIC, "moveit_msgs/ExecuteTrajectoryActionGoal", (topic) => {
@@ -639,16 +1003,36 @@ function setRightPanelTab(tab: RightPanelTab): void {
   renderRightPanel();
 }
 
-function showDetailModal(text: string): void {
-  elements.detailModalContent.classList.remove("param-detail-content");
-  elements.detailModalContent.textContent = text;
+function openDetailModalContent(content: string | Node, contentClass?: string): void {
+  elements.detailModalContent.classList.remove("param-detail-content", "structured-detail-content");
+  clearElement(elements.detailModalContent);
+
+  if (contentClass) {
+    elements.detailModalContent.classList.add(contentClass);
+  }
+
+  if (typeof content === "string") {
+    elements.detailModalContent.textContent = content;
+  } else {
+    elements.detailModalContent.appendChild(content);
+  }
+
   elements.detailModal.classList.add("active");
   elements.detailModal.setAttribute("aria-hidden", "false");
 }
 
+function showDetailModal(text: string): void {
+  openDetailModalContent(text);
+}
+
+function showStructuredDetailModal(content: Node): void {
+  openDetailModalContent(content, "structured-detail-content");
+}
+
 function showParamDetailModal(paramName: string, value: string): void {
+  elements.detailModalContent.classList.remove("structured-detail-content");
   elements.detailModalContent.classList.add("param-detail-content");
-  elements.detailModalContent.textContent = "";
+  clearElement(elements.detailModalContent);
 
   const labelText = document.createTextNode(t(currentLanguage, "detail.paramValueLabel", { paramName }));
   elements.detailModalContent.appendChild(labelText);
@@ -666,6 +1050,287 @@ function showParamDetailModal(paramName: string, value: string): void {
 function hideDetailModal(): void {
   elements.detailModal.classList.remove("active");
   elements.detailModal.setAttribute("aria-hidden", "true");
+}
+
+function detailText(zh: string, en: string): string {
+  return currentLanguage === "zh" ? zh : en;
+}
+
+function detailFallback(value?: string | null): string {
+  const text = (value || "").trim();
+  return text ? text : detailText("\u65e0", "None");
+}
+
+function formatDetailList(values: string[]): string {
+  return values.length > 0 ? values.join(", ") : detailText("\u65e0", "None");
+}
+
+function formatDetailVector(values: [number, number, number] | null, unit = ""): string {
+  if (!values) {
+    return detailText("\u65e0", "None");
+  }
+  const joined = values.map((value) => formatNumber(value)).join(", ");
+  return unit ? joined + " " + unit : joined;
+}
+
+function formatDetailAngles(values: [number, number, number] | null): string {
+  if (!values) {
+    return detailText("\u65e0", "None");
+  }
+  return values.map((value) => formatNumber(convertAngleFromRad(value, "deg"), 1)).join(", ") + " deg";
+}
+
+function formatDetailMeters(value: number | null, digits = 4, unit = "m"): string {
+  if (value == null || !Number.isFinite(value)) {
+    return detailText("\u65e0", "None");
+  }
+  return formatNumber(value, digits) + " " + unit;
+}
+
+function formatDetailRadians(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) {
+    return detailText("\u65e0", "None");
+  }
+  return formatNumber(value, 3) + " rad / " + formatNumber(convertAngleFromRad(value, "deg"), 1) + " deg";
+}
+
+function formatJointLimitValue(value: number | null, jointType: string): string {
+  if (jointType === "revolute" || jointType === "continuous") {
+    return formatDetailRadians(value);
+  }
+  if (jointType === "prismatic") {
+    return formatDetailMeters(value, 4, "m");
+  }
+  if (value == null || !Number.isFinite(value)) {
+    return detailText("\u65e0", "None");
+  }
+  return formatNumber(value);
+}
+
+function formatJointCurrentValue(detail: RobotJointDetail): string {
+  if (detail.currentValue.length === 0) {
+    return detailText("\u56fa\u5b9a / \u65e0\u81ea\u7531\u5ea6", "Fixed / no DoF");
+  }
+
+  if (detail.type === "revolute" || detail.type === "continuous") {
+    return formatDetailRadians(detail.currentValue[0] ?? null);
+  }
+
+  if (detail.type === "prismatic") {
+    return formatDetailMeters(detail.currentValue[0] ?? null, 4, "m");
+  }
+
+  return detail.currentValue.map((value) => formatNumber(value)).join(", ");
+}
+
+function createStructuredDetailContent(kicker: string, title: string, sections: DetailSection[]): HTMLDivElement {
+  const root = document.createElement("div");
+  root.className = "structured-detail";
+
+  const header = document.createElement("div");
+  header.className = "structured-detail-header";
+
+  const kickerElement = document.createElement("div");
+  kickerElement.className = "structured-detail-kicker";
+  kickerElement.textContent = kicker;
+  header.appendChild(kickerElement);
+
+  const titleElement = document.createElement("div");
+  titleElement.className = "structured-detail-title";
+  titleElement.textContent = title;
+  header.appendChild(titleElement);
+
+  root.appendChild(header);
+
+  const sectionList = document.createElement("div");
+  sectionList.className = "structured-detail-sections";
+
+  for (const section of sections) {
+    if (section.fields.length === 0) {
+      continue;
+    }
+
+    const card = document.createElement("section");
+    card.className = "structured-detail-card";
+
+    const sectionTitle = document.createElement("h4");
+    sectionTitle.className = "structured-detail-section-title";
+    sectionTitle.textContent = section.title;
+    card.appendChild(sectionTitle);
+
+    const grid = document.createElement("div");
+    grid.className = "structured-detail-grid";
+
+    for (const field of section.fields) {
+      const label = document.createElement("div");
+      label.className = "structured-detail-label";
+      label.textContent = field.label;
+      grid.appendChild(label);
+
+      const value = document.createElement("div");
+      value.className = "structured-detail-value";
+      value.textContent = field.value;
+      grid.appendChild(value);
+    }
+
+    card.appendChild(grid);
+    sectionList.appendChild(card);
+  }
+
+  root.appendChild(sectionList);
+  return root;
+}
+
+function buildLinkDetailSections(detail: RobotLinkDetail): DetailSection[] {
+  const sections: DetailSection[] = [
+    {
+      title: detailText("\u6982\u89c8", "Overview"),
+      fields: [
+        { label: detailText("\u540d\u79f0", "Name"), value: detail.name },
+        { label: detailText("\u7236\u5173\u8282", "Parent joint"), value: detailFallback(detail.parentJoint) },
+        { label: detailText("\u5b50\u5173\u8282", "Child joints"), value: formatDetailList(detail.childJoints) }
+      ]
+    },
+    {
+      title: detailText("\u51e0\u4f55\u4fe1\u606f", "Geometry"),
+      fields: [
+        { label: detailText("\u53ef\u89c6\u4f53\u6570\u91cf", "Visual count"), value: String(detail.visualCount) },
+        { label: detailText("\u78b0\u649e\u4f53\u6570\u91cf", "Collision count"), value: String(detail.collisionCount) },
+        { label: detailText("\u6750\u8d28", "Materials"), value: formatDetailList(detail.materialNames) }
+      ]
+    }
+  ];
+
+  if (detail.pose) {
+    sections.push({
+      title: detailText("\u5f53\u524d\u4f4d\u59ff", "Current pose"),
+      fields: [
+        { label: detailText("\u4f4d\u7f6e xyz", "Position xyz"), value: formatDetailVector(detail.pose.xyz, "m") },
+        { label: detailText("\u59ff\u6001 rpy", "Orientation rpy"), value: formatDetailAngles(detail.pose.rpy) }
+      ]
+    });
+  }
+
+  if (detail.mass !== null || detail.inertialOrigin || detail.inertia) {
+    sections.push({
+      title: detailText("\u60ef\u6027\u4fe1\u606f", "Inertial"),
+      fields: [
+        { label: detailText("\u8d28\u91cf", "Mass"), value: formatDetailMeters(detail.mass, 4, "kg") },
+        { label: detailText("\u8d28\u5fc3 xyz", "COM xyz"), value: detail.inertialOrigin ? formatDetailVector(detail.inertialOrigin.xyz, "m") : detailText("\u65e0", "None") },
+        { label: detailText("\u8d28\u5fc3 rpy", "COM rpy"), value: detail.inertialOrigin ? formatDetailAngles(detail.inertialOrigin.rpy) : detailText("\u65e0", "None") },
+        { label: "Ixx / Iyy / Izz", value: detail.inertia ? [detail.inertia.ixx, detail.inertia.iyy, detail.inertia.izz].map((value) => value == null ? "--" : formatNumber(value, 4)).join(" / ") : detailText("\u65e0", "None") },
+        { label: "Ixy / Ixz / Iyz", value: detail.inertia ? [detail.inertia.ixy, detail.inertia.ixz, detail.inertia.iyz].map((value) => value == null ? "--" : formatNumber(value, 4)).join(" / ") : detailText("\u65e0", "None") }
+      ]
+    });
+  }
+
+  return sections;
+}
+
+function buildJointDetailSections(detail: RobotJointDetail): DetailSection[] {
+  const sections: DetailSection[] = [
+    {
+      title: detailText("\u6982\u89c8", "Overview"),
+      fields: [
+        { label: detailText("\u540d\u79f0", "Name"), value: detail.name },
+        { label: detailText("\u7c7b\u578b", "Type"), value: detailFallback(detail.type) },
+        { label: detailText("\u7236 Link", "Parent link"), value: detailFallback(detail.parentLink) },
+        { label: detailText("\u5b50 Link", "Child link"), value: detailFallback(detail.childLink) }
+      ]
+    },
+    {
+      title: detailText("\u8fd0\u52a8\u4fe1\u606f", "Motion"),
+      fields: [
+        { label: detailText("\u5f53\u524d\u503c", "Current value"), value: formatJointCurrentValue(detail) },
+        { label: detailText("\u8f74\u5411", "Axis"), value: formatDetailVector(detail.axis) },
+        { label: detailText("\u539f\u70b9 xyz", "Origin xyz"), value: detail.origin ? formatDetailVector(detail.origin.xyz, "m") : detailText("\u65e0", "None") },
+        { label: detailText("\u539f\u70b9 rpy", "Origin rpy"), value: detail.origin ? formatDetailAngles(detail.origin.rpy) : detailText("\u65e0", "None") }
+      ]
+    }
+  ];
+
+  if (detail.limit) {
+    sections.push({
+      title: detailText("\u9650\u4f4d\u53c2\u6570", "Limits"),
+      fields: [
+        { label: detailText("\u4e0b\u9650", "Lower"), value: formatJointLimitValue(detail.limit.lower, detail.type) },
+        { label: detailText("\u4e0a\u9650", "Upper"), value: formatJointLimitValue(detail.limit.upper, detail.type) },
+        { label: detailText("\u529b/\u529b\u77e9", "Effort"), value: detail.limit.effort == null ? detailText("\u65e0", "None") : formatNumber(detail.limit.effort, 3) },
+        { label: detailText("\u901f\u5ea6", "Velocity"), value: detail.limit.velocity == null ? detailText("\u65e0", "None") : formatNumber(detail.limit.velocity, 3) }
+      ]
+    });
+  }
+
+  if (detail.dynamics || detail.mimic) {
+    sections.push({
+      title: detailText("\u9644\u52a0\u4fe1\u606f", "Additional"),
+      fields: [
+        { label: detailText("\u963b\u5c3c", "Damping"), value: detail.dynamics?.damping == null ? detailText("\u65e0", "None") : formatNumber(detail.dynamics.damping, 4) },
+        { label: detailText("\u6469\u64e6", "Friction"), value: detail.dynamics?.friction == null ? detailText("\u65e0", "None") : formatNumber(detail.dynamics.friction, 4) },
+        { label: detailText("\u4ece\u52a8\u5173\u8282", "Mimic joint"), value: detail.mimic ? detailFallback(detail.mimic.joint) : detailText("\u65e0", "None") },
+        { label: detailText("\u4ece\u52a8\u53c2\u6570", "Mimic params"), value: detail.mimic ? "multiplier=" + (detail.mimic.multiplier == null ? "--" : formatNumber(detail.mimic.multiplier, 3)) + ", offset=" + (detail.mimic.offset == null ? "--" : formatNumber(detail.mimic.offset, 3)) : detailText("\u65e0", "None") }
+      ]
+    });
+  }
+
+  return sections;
+}
+
+function showLinkDetailModal(linkName: string): void {
+  const detail = sceneManager.getRobotLinkDetail(linkName);
+  if (!detail) {
+    const snapshot = sceneManager.getTfSnapshot();
+    const parent = snapshot.find((edge) => edge.child === linkName)?.parent ?? null;
+    const children = snapshot.filter((edge) => edge.parent === linkName).map((edge) => edge.child).sort((left, right) => left.localeCompare(right));
+    const transform = sceneManager.getRelativeTransform(linkName);
+    const euler = transform ? quatToEuler(transform.rotation) : null;
+    const sections: DetailSection[] = [
+      {
+        title: detailText("\u6982\u89c8", "Overview"),
+        fields: [
+          { label: detailText("\u540d\u79f0", "Name"), value: linkName },
+          { label: detailText("\u7236\u5750\u6807\u7cfb", "Parent frame"), value: detailFallback(parent) },
+          { label: detailText("\u5b50\u5750\u6807\u7cfb", "Child frames"), value: formatDetailList(children) }
+        ]
+      }
+    ];
+    if (transform && euler) {
+      sections.push({
+        title: detailText("\u5f53\u524d\u4f4d\u59ff", "Current pose"),
+        fields: [
+          { label: detailText("\u4f4d\u7f6e xyz", "Position xyz"), value: formatDetailVector([transform.translation.x, transform.translation.y, transform.translation.z], "m") },
+          { label: detailText("\u59ff\u6001 rpy", "Orientation rpy"), value: formatDetailAngles([euler.roll, euler.pitch, euler.yaw]) }
+        ]
+      });
+    }
+    showStructuredDetailModal(createStructuredDetailContent(detailText("\u5750\u6807\u7cfb\u8be6\u60c5", "Frame Detail"), linkName, sections));
+    return;
+  }
+
+  showStructuredDetailModal(createStructuredDetailContent(detailText("Link \u8be6\u60c5", "Link Detail"), detail.name, buildLinkDetailSections(detail)));
+}
+
+function showJointDetailModal(jointName: string): void {
+  const detail = sceneManager.getRobotJointDetail(jointName);
+  if (!detail) {
+    return;
+  }
+
+  showStructuredDetailModal(createStructuredDetailContent(detailText("\u5173\u8282\u8be6\u60c5", "Joint Detail"), detail.name, buildJointDetailSections(detail)));
+}
+
+function makeTfTreeRowInteractive(row: HTMLDivElement, onActivate: () => void): HTMLDivElement {
+  row.classList.add("tf-tree-row-clickable");
+  row.tabIndex = 0;
+  row.setAttribute("role", "button");
+  row.addEventListener("click", onActivate);
+  row.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onActivate();
+    }
+  });
+  return row;
 }
 
 function formatUnknownValue(value: unknown): string {
@@ -1023,6 +1688,7 @@ function updateFrameOptions(): void {
     elements.cartesianFrame.innerHTML = "";
     cartesianFrame = "";
     lastFrameOptions = [];
+    sceneManager.setEndEffectorFrame("");
     refreshEnhancedSelect(elements.cartesianFrame);
     return;
   }
@@ -1062,6 +1728,7 @@ function updateFrameOptions(): void {
     frames[0];
   cartesianFrame = frames.includes(preferred) ? preferred : frames[0];
   elements.cartesianFrame.value = cartesianFrame;
+  sceneManager.setEndEffectorFrame(cartesianFrame);
   refreshEnhancedSelect(elements.cartesianFrame);
 }
 function renderCartesianValues(): void {
@@ -1092,13 +1759,13 @@ function renderCartesianValues(): void {
   addDataRow(elements.cartesianValues, `Yaw (${angleUnit})`, formatNumber(convertAngleFromRad(euler.yaw, cartesianAngleUnit)));
 }
 
-function buildTfTreeLines(snapshot: Array<{ parent: string; child: string }>, visibleNodes: Set<string> | null = null): string[] {
+function buildTfTreeGraph(snapshot: Array<{ parent: string; child: string }>, visibleNodes: Set<string> | null = null): TfTreeGraph | null {
   if (snapshot.length === 0) {
-    return [];
+    return null;
   }
 
   if (visibleNodes && visibleNodes.size === 0) {
-    return [];
+    return null;
   }
 
   const childrenByParent = new Map<string, string[]>();
@@ -1125,7 +1792,7 @@ function buildTfTreeLines(snapshot: Array<{ parent: string; child: string }>, vi
   }
 
   if (nodes.size === 0) {
-    return [];
+    return null;
   }
 
   for (const [parent, children] of childrenByParent.entries()) {
@@ -1139,64 +1806,41 @@ function buildTfTreeLines(snapshot: Array<{ parent: string; child: string }>, vi
   }
   roots.sort((left, right) => left.localeCompare(right));
 
-  const fixedFrame = sceneManager.getFixedFrame();
-  const selectedFrame = cartesianFrame;
-  const lines: string[] = [];
-  const stack = new Set<string>();
-  const maxLines = 400;
-
-  const formatLabel = (frame: string): string => {
-    let label = frame;
-    if (frame === fixedFrame) {
-      label += ` [${t(currentLanguage, "tf.fixed")}]`;
-    }
-    if (frame === selectedFrame) {
-      label += ` [${t(currentLanguage, "tf.selected")}]`;
-    }
-    return label;
-  };
-
-  const renderNode = (node: string, depth: number): void => {
-    if (lines.length >= maxLines) {
-      return;
-    }
-
-    lines.push(`${"  ".repeat(depth)}${formatLabel(node)}`);
-
-    if (stack.has(node)) {
-      lines.push(`${"  ".repeat(depth + 1)}(${t(currentLanguage, "tf.loop")})`);
-      return;
-    }
-
-    const children = childrenByParent.get(node);
-    if (!children || children.length === 0) {
-      return;
-    }
-
-    stack.add(node);
-    for (const child of children) {
-      if (lines.length >= maxLines) {
-        break;
-      }
-      renderNode(child, depth + 1);
-    }
-    stack.delete(node);
-  };
-
-  for (const root of roots) {
-    if (lines.length >= maxLines) {
-      break;
-    }
-    renderNode(root, 0);
-  }
-
-  if (lines.length >= maxLines) {
-    lines.push("...");
-  }
-
-  return lines;
+  return { roots, childrenByParent };
 }
 
+function buildTfJointLookup(connections: RobotJointConnection[] = sceneManager.getRobotJointConnections()): Map<string, RobotJointConnection> {
+  const lookup = new Map<string, RobotJointConnection>();
+  for (const joint of connections) {
+    lookup.set(joint.parent + "::" + joint.child, joint);
+  }
+  return lookup;
+}
+
+function createTfTreeRow(
+  kind: "frame" | "joint" | "note",
+  label: string,
+  depth: number,
+  badges: string[] = []
+): HTMLDivElement {
+  const row = document.createElement("div");
+  row.className = "tf-tree-row tf-tree-row-" + kind;
+  row.style.paddingLeft = String(depth * 10) + "px";
+
+  const name = document.createElement("span");
+  name.className = "tf-tree-name";
+  name.textContent = label;
+  row.appendChild(name);
+
+  for (const badgeText of badges) {
+    const badge = document.createElement("span");
+    badge.className = "tf-tree-badge";
+    badge.textContent = "[" + badgeText + "]";
+    row.appendChild(badge);
+  }
+
+  return row;
+}
 function getTfTreeOrder(snapshot: Array<{ parent: string; child: string }>): string[] {
   if (snapshot.length === 0) {
     return [];
@@ -1385,6 +2029,25 @@ function applyTfVisualizationFilter(snapshot: Array<{ parent: string; child: str
   sceneManager.setVisibleTfFrames(getVisibleTfNodes(snapshot));
 }
 
+function getTfTreeStructureSignature(snapshot: Array<{ parent: string; child: string }>, joints: RobotJointConnection[]): string {
+  const edgeSignature = [...snapshot]
+    .map((edge) => edge.parent + ">" + edge.child)
+    .sort((left, right) => left.localeCompare(right))
+    .join("|");
+  const jointSignature = joints
+    .map((joint) => joint.parent + ">" + joint.name + ">" + joint.child + ">" + joint.type)
+    .sort((left, right) => left.localeCompare(right))
+    .join("|");
+
+  return [
+    currentLanguage,
+    sceneManager.getFixedFrame(),
+    cartesianFrame,
+    edgeSignature,
+    jointSignature
+  ].join("||");
+}
+
 function renderTfTree(): void {
   const snapshot = sceneManager.getTfSnapshot();
   const availableFrames = getTfTreeOrder(snapshot);
@@ -1393,15 +2056,100 @@ function renderTfTree(): void {
   updateTfToolbarUi(availableFrames);
   renderTfFilterMenu(availableFrames);
 
-  const lines = buildTfTreeLines(snapshot, null);
-  if (lines.length === 0) {
+  const graph = buildTfTreeGraph(snapshot, null);
+  const jointConnections = sceneManager.getRobotJointConnections();
+  const renderSignature = graph
+    ? getTfTreeStructureSignature(snapshot, jointConnections)
+    : ["empty", currentLanguage, sceneManager.getFixedFrame(), cartesianFrame].join("||");
+
+  if (renderSignature === lastTfTreeRenderSignature) {
+    return;
+  }
+
+  lastTfTreeRenderSignature = renderSignature;
+  clearElement(elements.tfTree);
+
+  if (!graph) {
     elements.tfTree.textContent = t(currentLanguage, "state.noTfData");
     return;
   }
 
-  elements.tfTree.textContent = lines.join("\n");
-}
+  const fixedFrame = sceneManager.getFixedFrame();
+  const selectedFrame = cartesianFrame;
+  const jointLookup = buildTfJointLookup(jointConnections);
+  const content = document.createElement("div");
+  content.className = "tf-tree-content";
+  elements.tfTree.appendChild(content);
 
+  const stack = new Set<string>();
+  let rowCount = 0;
+  const maxRows = 600;
+
+  const appendFrame = (frame: string, depth: number): void => {
+    if (rowCount >= maxRows) {
+      return;
+    }
+
+    const badges: string[] = [];
+    if (frame === fixedFrame) {
+      badges.push(t(currentLanguage, "tf.fixed"));
+    }
+    if (frame === selectedFrame) {
+      badges.push(t(currentLanguage, "tf.selected"));
+    }
+    const frameRow = makeTfTreeRowInteractive(createTfTreeRow("frame", frame, depth, badges), () => {
+      showLinkDetailModal(frame);
+    });
+    content.appendChild(frameRow);
+    rowCount += 1;
+
+    if (stack.has(frame)) {
+      if (rowCount < maxRows) {
+        content.appendChild(createTfTreeRow("note", "(" + t(currentLanguage, "tf.loop") + ")", depth + 1));
+        rowCount += 1;
+      }
+      return;
+    }
+
+    const children = graph.childrenByParent.get(frame);
+    if (!children || children.length === 0) {
+      return;
+    }
+
+    stack.add(frame);
+    for (const child of children) {
+      if (rowCount >= maxRows) {
+        break;
+      }
+
+      const joint = jointLookup.get(frame + "::" + child);
+      if (joint) {
+        const jointRow = makeTfTreeRowInteractive(createTfTreeRow("joint", joint.name, depth + 1), () => {
+          showJointDetailModal(joint.name);
+        });
+        content.appendChild(jointRow);
+        rowCount += 1;
+        if (rowCount >= maxRows) {
+          break;
+        }
+      }
+
+      appendFrame(child, depth + (joint ? 2 : 1));
+    }
+    stack.delete(frame);
+  };
+
+  for (const root of graph.roots) {
+    if (rowCount >= maxRows) {
+      break;
+    }
+    appendFrame(root, 0);
+  }
+
+  if (rowCount >= maxRows) {
+    content.appendChild(createTfTreeRow("note", "...", 0));
+  }
+}
 function getTrajectoryDurationMs(): number {
   if (trajectory.length === 0) {
     return 0;
@@ -1588,6 +2336,12 @@ function clearTrajectory(): void {
   updateTrajectoryUi();
 }
 
+function clearAllTrajectoryDisplays(): void {
+  moveItPreviewArmed = false;
+  clearPlannedTrajectoryState();
+  clearTrajectory();
+}
+
 function recordTrajectorySnapshot(message: unknown): void {
   if (!isRecording || isPlaying) {
     return;
@@ -1732,6 +2486,7 @@ function scheduleRightPanelUpdate(): void {
 function clearRightPanelState(): void {
   jointState = [];
   cartesianFrame = "";
+  lastTfTreeRenderSignature = "";
   lastFrameOptions = [];
   elements.cartesianFrame.innerHTML = "";
   clearRosInfoState();
@@ -1787,6 +2542,7 @@ function clearSubscriptions(): void {
   unsubscribe(subscriptions.pointCloud);
   unsubscribe(subscriptions.moveGroupGoal);
   unsubscribe(subscriptions.moveGroupResult);
+  unsubscribe(subscriptions.displayTrajectory);
   unsubscribe(subscriptions.executeTrajectoryGoal);
   unsubscribe(subscriptions.executeTrajectoryResult);
   subscriptions = {};
@@ -1854,6 +2610,7 @@ async function subscribeCoreTopics(): Promise<void> {
     }
     sceneManager.updateJointStates(message);
     updateJointStateSnapshot(message);
+    retryPendingPlannedTrajectory();
     recordTrajectorySnapshot(message);
     scheduleRightPanelUpdate();
   });
@@ -1861,12 +2618,14 @@ async function subscribeCoreTopics(): Promise<void> {
   subscriptions.tf = rosClient.createTopic("/tf", "tf2_msgs/TFMessage");
   subscriptions.tf.subscribe((message: unknown) => {
     sceneManager.upsertTfMessage(message);
+    retryPendingPlannedTrajectory();
     scheduleRightPanelUpdate();
   });
 
   subscriptions.tfStatic = rosClient.createTopic("/tf_static", "tf2_msgs/TFMessage");
   subscriptions.tfStatic.subscribe((message: unknown) => {
     sceneManager.upsertTfMessage(message);
+    retryPendingPlannedTrajectory();
     scheduleRightPanelUpdate();
   });
 
@@ -1901,10 +2660,12 @@ async function subscribePointCloud(topicName: string): Promise<void> {
 async function loadRobotIntoScene(): Promise<void> {
   const loaded = await loadRobotModel(rosClient, config.urdfFallbackPath, config.packageRootUrl);
   sceneManager.setRobot(loaded.robot, loaded.rootLink);
+  refreshLatestPlannedTrajectoryPreview();
   log(`robot model loaded (root=${loaded.rootLink})`);
 }
 
 async function connect(): Promise<void> {
+  clearAllTrajectoryDisplays();
   syncConfigFromUi();
   log(`connecting ROS bridge: ${config.rosbridgeUrl}`);
 
@@ -1943,14 +2704,7 @@ function disconnect(): void {
   sceneManager.setPointCloud(null);
   sceneManager.setRobot(null);
   sceneManager.clearTfRecords();
-  stopPlayback();
-  isRecording = false;
-  isPlaybackPaused = false;
-  recordArmed = false;
-  recordArmBaseline = null;
-  recordLastMotionTime = 0;
-  recordLastPositions = null;
-  clearTrajectory();
+  clearAllTrajectoryDisplays();
   clearRightPanelState();
   log("disconnected");
 }
@@ -2001,6 +2755,9 @@ async function syncFromRviz(): Promise<void> {
 
 applyTheme(currentTheme);
 sceneManager.setTheme(currentTheme);
+sceneManager.setPlannedTrajectoryVisible(plannedTrajectoryVisible);
+elements.plannedTrajectoryToggleBtn.innerHTML = TRAJ_ICON_PLAN_PATH;
+updatePlannedTrajectoryToggleUi();
 renderConfigToUi();
 updatePointCloudOptions([], config.defaultPointCloudTopic);
 enhanceSelect(elements.pointCloudTopic);
@@ -2076,6 +2833,12 @@ elements.rightTabRobot.addEventListener("click", () => {
 
 elements.rightTabRosInfo.addEventListener("click", () => {
   setRightPanelTab("rosInfo");
+});
+
+elements.plannedTrajectoryToggleBtn.addEventListener("click", () => {
+  plannedTrajectoryVisible = !plannedTrajectoryVisible;
+  sceneManager.setPlannedTrajectoryVisible(plannedTrajectoryVisible);
+  updatePlannedTrajectoryToggleUi();
 });
 
 elements.tfToggleAllBtn.addEventListener("click", () => {
@@ -2154,6 +2917,8 @@ elements.cartesianFrame.addEventListener("change", () => {
     return;
   }
   cartesianFrame = elements.cartesianFrame.value;
+  sceneManager.setEndEffectorFrame(cartesianFrame);
+  refreshLatestPlannedTrajectoryPreview();
   log(`cartesian frame changed: ${cartesianFrame || "(none)"}`);
   scheduleRightPanelUpdate();
 });
@@ -2255,6 +3020,7 @@ window.addEventListener("beforeunload", () => {
 });
 
 log(t(currentLanguage, "log.ready"));
+
 
 
 

@@ -220,6 +220,7 @@ npm run preview
 | `URDF fallback URL` | `/robot_description` 不可用时使用 | `/urdf/five_axis.urdf` |
 | `URDF package root URL` | `package://` 对应 HTTP 根路径 | `/ros_pkgs` |
 | `PointCloud2 topic` | 点云话题，支持自动发现 | `/pointcloud/output` |
+
 配置与界面偏好会保存到浏览器 `localStorage`：
 
 ```text
