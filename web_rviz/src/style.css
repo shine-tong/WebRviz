@@ -1633,6 +1633,12 @@ body {
   color: var(--text);
 }
 
+.ros-graph-tool-btn.is-active {
+  background: var(--surface-tab-active);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .ros-graph-tool-btn:active:not(:disabled) {
   transform: translateY(1px);
 }

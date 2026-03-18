@@ -61,6 +61,7 @@ interface AppElements {
   rosGraphSearch: HTMLInputElement;
   rosGraphRefreshBtn: HTMLButtonElement;
   rosGraphFitBtn: HTMLButtonElement;
+  rosGraphModeBtn: HTMLButtonElement;
   rosGraphCloseBtn: HTMLButtonElement;
   rosGraphMeta: HTMLElement;
   rosGraphBanner: HTMLElement;
@@ -169,11 +170,14 @@ interface RosGraphTopicEntity {
 
 type RosGraphEntity = RosGraphNodeEntity | RosGraphTopicEntity;
 
+type RosGraphViewMode = "detail" | "nodeCommunication";
+
 interface RosGraphEdge {
   id: string;
   sourceId: string;
   targetId: string;
-  kind: "publish" | "subscribe";
+  kind: "publish" | "subscribe" | "nodeCommunication";
+  labels?: string[];
 }
 
 interface RosGraphBounds {
@@ -183,11 +187,16 @@ interface RosGraphBounds {
   maxY: number;
 }
 
-interface RosGraphSnapshot {
+interface RosGraphViewSnapshot {
   entities: RosGraphEntity[];
   entityById: Map<string, RosGraphEntity>;
   edges: RosGraphEdge[];
   adjacency: Map<string, Set<string>>;
+}
+
+interface RosGraphSnapshot {
+  detailView: RosGraphViewSnapshot;
+  nodeCommunicationView: RosGraphViewSnapshot;
   updatedAt: number;
   partialFailures: string[];
 }
@@ -222,6 +231,7 @@ const SIDEBAR_ICON_SHOW = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="non
 const ROS_GRAPH_ICON = '<svg viewBox="0 0 1024 1024" aria-hidden="true"><path d="M409.088 622.08l-68.608 51.712c18.432 49.664-7.168 104.96-56.832 123.392s-104.96-7.168-123.392-56.832 7.168-104.96 56.832-123.392c32.768-12.288 69.632-5.12 95.744 17.408l70.144-53.248c-37.376-84.992 1.024-184.32 86.016-221.696 42.496-18.944 90.624-18.944 133.632-1.024l24.064-53.76c-43.52-30.72-53.76-90.624-23.04-133.632 30.72-43.52 90.624-53.76 133.632-23.04 43.52 30.72 53.76 90.624 23.04 133.632-19.968 28.672-54.272 44.032-88.576 39.936L644.608 384c38.4 31.744 60.928 79.36 60.928 129.536 0 41.984-15.36 79.872-40.448 109.568l74.24 92.16c48.64-21.504 104.96 0 126.976 48.64 21.504 48.64 0 104.96-48.64 126.976-48.64 21.504-104.96 0-126.976-48.64-14.336-31.744-10.24-69.12 10.752-96.768L628.224 655.36c-26.112 16.896-57.856 27.136-91.136 27.136-49.152-1.024-95.744-23.04-128-60.416z" fill="currentColor"/></svg>';
 const ROS_GRAPH_REFRESH_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 1-2.34-5.66" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 4v5h-5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ROS_GRAPH_FIT_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4M16 4h4v4M20 16v4h-4M8 20H4v-4" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 9l-5-5M15 9l5-5M15 15l5 5M9 15l-5 5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const ROS_GRAPH_MODE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6.5" cy="12" r="2"/><circle cx="17.5" cy="6.5" r="2"/><circle cx="17.5" cy="17.5" r="2"/><path d="M8.6 11.2 14.9 7.4M8.6 12.8 14.9 16.6M10.6 12h2.8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ROS_GRAPH_CLOSE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6 18 18M18 6 6 18" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ROS_GRAPH_MIN_SCALE = 0.3;
 const ROS_GRAPH_MAX_SCALE = 2.4;
@@ -294,6 +304,7 @@ function getElements(): AppElements {
     rosGraphSearch: byId<HTMLInputElement>("rosGraphSearch"),
     rosGraphRefreshBtn: byId<HTMLButtonElement>("rosGraphRefreshBtn"),
     rosGraphFitBtn: byId<HTMLButtonElement>("rosGraphFitBtn"),
+    rosGraphModeBtn: byId<HTMLButtonElement>("rosGraphModeBtn"),
     rosGraphCloseBtn: byId<HTMLButtonElement>("rosGraphCloseBtn"),
     rosGraphMeta: byId<HTMLElement>("rosGraphMeta"),
     rosGraphBanner: byId<HTMLElement>("rosGraphBanner"),
@@ -372,6 +383,7 @@ let rosGraphSnapshot: RosGraphSnapshot | null = null;
 let rosGraphError: string | null = null;
 let rosGraphSelectedId: string | null = null;
 let rosGraphSearchQuery = "";
+let rosGraphViewMode: RosGraphViewMode = "detail";
 let rosGraphPanX = 0;
 let rosGraphPanY = 0;
 let rosGraphScale = 1;
@@ -3136,6 +3148,86 @@ function layoutRosGraphEntities(entities: RosGraphEntity[], adjacency: Map<strin
   }
 }
 
+function buildRosGraphViewSnapshot(entities: RosGraphEntity[], edges: RosGraphEdge[]): RosGraphViewSnapshot {
+  const entityById = new Map<string, RosGraphEntity>();
+  const adjacency = new Map<string, Set<string>>();
+
+  for (const entity of entities) {
+    entityById.set(entity.id, entity);
+    adjacency.set(entity.id, new Set<string>());
+  }
+
+  for (const edge of edges) {
+    const sourceNeighbors = adjacency.get(edge.sourceId);
+    const targetNeighbors = adjacency.get(edge.targetId);
+    if (!sourceNeighbors || !targetNeighbors) {
+      continue;
+    }
+    sourceNeighbors.add(edge.targetId);
+    targetNeighbors.add(edge.sourceId);
+  }
+
+  layoutRosGraphEntities(entities, adjacency);
+
+  return {
+    entities,
+    entityById,
+    edges,
+    adjacency
+  };
+}
+
+function cloneRosGraphNodeEntity(node: RosGraphNodeEntity): RosGraphNodeEntity {
+  return {
+    ...node,
+    publishing: node.publishing.slice(),
+    subscribing: node.subscribing.slice(),
+    services: node.services.slice()
+  };
+}
+
+function buildRosGraphNodeCommunicationView(nodeEntities: RosGraphNodeEntity[], topicEntities: RosGraphTopicEntity[]): RosGraphViewSnapshot {
+  const communicationNodes = nodeEntities.map((node) => cloneRosGraphNodeEntity(node));
+  const availableIds = new Set<string>(communicationNodes.map((node) => node.id));
+  const edgeAccumulator = new Map<string, { sourceId: string; targetId: string; topics: Set<string> }>();
+
+  for (const topic of topicEntities) {
+    for (const publisher of topic.publishers) {
+      const sourceId = rosGraphEntityId("node", publisher);
+      if (!availableIds.has(sourceId)) {
+        continue;
+      }
+
+      for (const subscriber of topic.subscribers) {
+        const targetId = rosGraphEntityId("node", subscriber);
+        if (!availableIds.has(targetId) || sourceId === targetId) {
+          continue;
+        }
+
+        const edgeKey = sourceId + "->" + targetId;
+        let record = edgeAccumulator.get(edgeKey);
+        if (!record) {
+          record = { sourceId, targetId, topics: new Set<string>() };
+          edgeAccumulator.set(edgeKey, record);
+        }
+        record.topics.add(topic.name);
+      }
+    }
+  }
+
+  const edges: RosGraphEdge[] = Array.from(edgeAccumulator.values())
+    .map((record) => ({
+      id: record.sourceId + "->" + record.targetId + ":nodeCommunication",
+      sourceId: record.sourceId,
+      targetId: record.targetId,
+      kind: "nodeCommunication" as const,
+      labels: Array.from(record.topics).sort((left, right) => left.localeCompare(right))
+    }))
+    .sort((left, right) => left.sourceId.localeCompare(right.sourceId) || left.targetId.localeCompare(right.targetId));
+
+  return buildRosGraphViewSnapshot(communicationNodes, edges);
+}
+
 function buildRosGraphSnapshot(nodeEntries: Array<{ name: string; details: NodeDetails }>, partialFailures: string[]): RosGraphSnapshot {
   const topicTypeByName = new Map<string, string>();
   for (const topic of topics) {
@@ -3193,65 +3285,52 @@ function buildRosGraphSnapshot(nodeEntries: Array<{ name: string; details: NodeD
       };
     });
 
-  const topicEntities = Array.from(topicAccumulator.values())
+  const topicEntities: RosGraphTopicEntity[] = Array.from(topicAccumulator.values())
     .sort((left, right) => left.name.localeCompare(right.name))
     .map((record) => ({
       id: rosGraphEntityId("topic", record.name),
       kind: "topic" as const,
       name: record.name,
       type: record.type,
-      publishers: dedupeSortedStrings(Array.from(record.publishers)),
-      subscribers: dedupeSortedStrings(Array.from(record.subscribers)),
+      publishers: Array.from(record.publishers).sort((left, right) => left.localeCompare(right)),
+      subscribers: Array.from(record.subscribers).sort((left, right) => left.localeCompare(right)),
       x: 0,
       y: 0,
       width: rosGraphEntityWidth("topic", record.name),
       height: ROS_GRAPH_TOPIC_HEIGHT
     }));
 
-  const entities: RosGraphEntity[] = [...nodeEntities, ...topicEntities];
-  const entityById = new Map<string, RosGraphEntity>();
-  const adjacency = new Map<string, Set<string>>();
-  for (const entity of entities) {
-    entityById.set(entity.id, entity);
-    adjacency.set(entity.id, new Set<string>());
-  }
-
-  const edges: RosGraphEdge[] = [];
+  const detailEdges: RosGraphEdge[] = [];
   for (const node of nodeEntities) {
     for (const topicName of node.publishing) {
       const topicId = rosGraphEntityId("topic", topicName);
-      edges.push({
+      detailEdges.push({
         id: node.id + "->" + topicId + ":publish",
         sourceId: node.id,
         targetId: topicId,
         kind: "publish"
       });
-      adjacency.get(node.id)?.add(topicId);
-      adjacency.get(topicId)?.add(node.id);
     }
 
     for (const topicName of node.subscribing) {
       const topicId = rosGraphEntityId("topic", topicName);
-      edges.push({
+      detailEdges.push({
         id: topicId + "->" + node.id + ":subscribe",
         sourceId: topicId,
         targetId: node.id,
         kind: "subscribe"
       });
-      adjacency.get(node.id)?.add(topicId);
-      adjacency.get(topicId)?.add(node.id);
     }
   }
 
-  layoutRosGraphEntities(entities, adjacency);
+  const detailView = buildRosGraphViewSnapshot([...nodeEntities, ...topicEntities], detailEdges);
+  const nodeCommunicationView = buildRosGraphNodeCommunicationView(nodeEntities, topicEntities);
 
   return {
-    entities,
-    entityById,
-    edges,
-    adjacency,
+    detailView,
+    nodeCommunicationView,
     updatedAt: Date.now(),
-    partialFailures
+    partialFailures: partialFailures.slice()
   };
 }
 
@@ -3276,43 +3355,45 @@ function applyRosGraphTransform(): void {
 }
 
 function getRosGraphVisibleData(): RosGraphVisibleData {
-  if (!rosGraphSnapshot) {
+  const activeView = getActiveRosGraphView();
+  if (!activeView) {
     return { entities: [], entityIds: new Set<string>(), edges: [] };
   }
 
   const query = rosGraphSearchQuery.trim().toLowerCase();
   if (!query) {
     return {
-      entities: rosGraphSnapshot.entities.slice(),
-      entityIds: new Set<string>(rosGraphSnapshot.entities.map((entity) => entity.id)),
-      edges: rosGraphSnapshot.edges.slice()
+      entities: activeView.entities.slice(),
+      entityIds: new Set<string>(activeView.entities.map((entity) => entity.id)),
+      edges: activeView.edges.slice()
     };
   }
 
-  const matchedIds = rosGraphSnapshot.entities
+  const matchedIds = activeView.entities
     .filter((entity) => entity.name.toLowerCase().includes(query))
     .map((entity) => entity.id);
   const visibleIds = new Set<string>(matchedIds);
   for (const entityId of matchedIds) {
-    for (const neighbor of rosGraphSnapshot.adjacency.get(entityId) ?? []) {
+    for (const neighbor of activeView.adjacency.get(entityId) ?? []) {
       visibleIds.add(neighbor);
     }
   }
 
   return {
-    entities: rosGraphSnapshot.entities.filter((entity) => visibleIds.has(entity.id)),
+    entities: activeView.entities.filter((entity) => visibleIds.has(entity.id)),
     entityIds: visibleIds,
-    edges: rosGraphSnapshot.edges.filter((edge) => visibleIds.has(edge.sourceId) && visibleIds.has(edge.targetId))
+    edges: activeView.edges.filter((edge) => visibleIds.has(edge.sourceId) && visibleIds.has(edge.targetId))
   };
 }
 
 function syncRosGraphSelection(visibleIds: Set<string>): void {
-  if (!rosGraphSnapshot) {
+  const activeView = getActiveRosGraphView();
+  if (!activeView) {
     rosGraphSelectedId = null;
     return;
   }
 
-  if (rosGraphSelectedId && !rosGraphSnapshot.entityById.has(rosGraphSelectedId)) {
+  if (rosGraphSelectedId && !activeView.entityById.has(rosGraphSelectedId)) {
     rosGraphSelectedId = null;
   }
 
@@ -3323,11 +3404,12 @@ function syncRosGraphSelection(visibleIds: Set<string>): void {
 
 function getRosGraphFocusIds(): Set<string> {
   const focusIds = new Set<string>();
-  if (!rosGraphSnapshot || !rosGraphSelectedId) {
+  const activeView = getActiveRosGraphView();
+  if (!activeView || !rosGraphSelectedId) {
     return focusIds;
   }
   focusIds.add(rosGraphSelectedId);
-  for (const neighbor of rosGraphSnapshot.adjacency.get(rosGraphSelectedId) ?? []) {
+  for (const neighbor of activeView.adjacency.get(rosGraphSelectedId) ?? []) {
     focusIds.add(neighbor);
   }
   return focusIds;
@@ -3359,10 +3441,11 @@ function fitRosGraphToView(): void {
 }
 
 function centerRosGraphOnEntity(entityId: string): void {
-  if (!rosGraphSnapshot) {
+  const activeView = getActiveRosGraphView();
+  if (!activeView) {
     return;
   }
-  const entity = rosGraphSnapshot.entityById.get(entityId);
+  const entity = activeView.entityById.get(entityId);
   if (!entity) {
     return;
   }
@@ -3439,14 +3522,15 @@ async function refreshRosGraphSnapshot(): Promise<void> {
     }
 
     rosGraphSnapshot = buildRosGraphSnapshot(successfulNodes, partialFailures);
-    if (rosGraphSelectedId && !rosGraphSnapshot.entityById.has(rosGraphSelectedId)) {
+    const activeView = getActiveRosGraphView();
+    if (rosGraphSelectedId && activeView && !activeView.entityById.has(rosGraphSelectedId)) {
       rosGraphSelectedId = null;
     }
     log(
       "ROS graph refreshed: " +
       String(successfulNodes.length) +
       " nodes, " +
-      String(rosGraphSnapshot.entities.filter((entity) => entity.kind === "topic").length) +
+      String(rosGraphSnapshot.detailView.entities.filter((entity) => entity.kind === "topic").length) +
       " topics"
     );
     if (partialFailures.length > 0) {
@@ -3480,7 +3564,40 @@ function rosGraphMetaText(): string {
   });
 }
 
+function getActiveRosGraphView(): RosGraphViewSnapshot | null {
+  if (!rosGraphSnapshot) {
+    return null;
+  }
+  return rosGraphViewMode === "nodeCommunication" ? rosGraphSnapshot.nodeCommunicationView : rosGraphSnapshot.detailView;
+}
+
+function rosGraphHintText(): string {
+  return t(currentLanguage, rosGraphViewMode === "nodeCommunication" ? "state.rosGraphNodeHint" : "state.rosGraphHint");
+}
+
+function rosGraphEdgeLabelText(labels: string[]): string {
+  if (labels.length === 0) {
+    return "";
+  }
+  if (labels.length === 1) {
+    return rosGraphLabel(labels[0], 24);
+  }
+  const preview = rosGraphLabel(labels[0], 14);
+  return preview + " +" + String(labels.length - 1);
+}
+
+function shouldRenderRosGraphEdgeLabel(edge: RosGraphEdge, hasSelection: boolean): boolean {
+  if (edge.kind !== "nodeCommunication" || !edge.labels || edge.labels.length === 0) {
+    return false;
+  }
+  if (!hasSelection || !rosGraphSelectedId) {
+    return false;
+  }
+  return edge.sourceId === rosGraphSelectedId || edge.targetId === rosGraphSelectedId;
+}
+
 function rosGraphEmptyText(visible: RosGraphVisibleData): string {
+  const activeView = getActiveRosGraphView();
   if (!rosClient.isConnected()) {
     return t(currentLanguage, "state.notConnected");
   }
@@ -3490,7 +3607,7 @@ function rosGraphEmptyText(visible: RosGraphVisibleData): string {
   if (rosGraphError && !rosGraphSnapshot) {
     return t(currentLanguage, "state.rosGraphRefreshFailed", { detail: rosGraphError });
   }
-  if (!rosGraphSnapshot || rosGraphSnapshot.entities.length === 0) {
+  if (!activeView || activeView.entities.length === 0) {
     return t(currentLanguage, "state.rosGraphEmpty");
   }
   if (visible.entities.length === 0) {
@@ -3542,6 +3659,26 @@ function selectRosGraphEntity(entityId: string | null, center = false): void {
       centerRosGraphOnEntity(entityId);
     });
   }
+}
+
+function selectRosGraphNamedEntity(kind: "node" | "topic", name: string): void {
+  if (kind === "topic" && rosGraphViewMode === "nodeCommunication") {
+    rosGraphViewMode = "detail";
+  }
+  selectRosGraphEntity(rosGraphEntityId(kind, name), true);
+}
+
+function toggleRosGraphViewMode(): void {
+  if (!rosGraphSnapshot) {
+    return;
+  }
+  rosGraphViewMode = rosGraphViewMode === "detail" ? "nodeCommunication" : "detail";
+  renderRosGraphModal();
+  window.requestAnimationFrame(() => {
+    if (rosGraphOpen) {
+      fitRosGraphToView();
+    }
+  });
 }
 
 function createRosGraphDetailEmpty(message: string): void {
@@ -3633,7 +3770,7 @@ function appendRosGraphDetailSection(title: string, items: string[], kind: "node
         button.className = "ros-graph-detail-link";
         button.textContent = item;
         button.addEventListener("click", () => {
-          selectRosGraphEntity(rosGraphEntityId(kind, item), true);
+          selectRosGraphNamedEntity(kind, item);
         });
         list.appendChild(button);
       } else {
@@ -3665,15 +3802,16 @@ function renderRosGraphDetail(visibleIds: Set<string>): void {
     return;
   }
 
-  if (!rosGraphSnapshot) {
-    createRosGraphDetailEmpty(t(currentLanguage, "state.rosGraphHint"));
+  const activeView = getActiveRosGraphView();
+  if (!activeView) {
+    createRosGraphDetailEmpty(rosGraphHintText());
     return;
   }
 
   syncRosGraphSelection(visibleIds);
-  const entity = rosGraphSelectedId ? rosGraphSnapshot.entityById.get(rosGraphSelectedId) ?? null : null;
+  const entity = rosGraphSelectedId ? activeView.entityById.get(rosGraphSelectedId) ?? null : null;
   if (!entity) {
-    createRosGraphDetailEmpty(t(currentLanguage, "state.rosGraphHint"));
+    createRosGraphDetailEmpty(rosGraphHintText());
     return;
   }
 
@@ -3689,6 +3827,48 @@ function renderRosGraphDetail(visibleIds: Set<string>): void {
   }
 }
 
+function getRosGraphEdgeGeometry(
+  source: RosGraphEntity,
+  target: RosGraphEntity,
+  bendOffset: number,
+  labelProgress = 0.5,
+  labelLift = 14
+): { pathData: string; labelX: number; labelY: number } {
+  const midpointX = (source.x + target.x) / 2;
+  const midpointY = (source.y + target.y) / 2;
+  const centerDx = target.x - source.x;
+  const centerDy = target.y - source.y;
+  const centerDistance = Math.hypot(centerDx, centerDy) || 1;
+  const normalX = -centerDy / centerDistance;
+  const normalY = centerDx / centerDistance;
+
+  if (bendOffset === 0) {
+    const start = getRosGraphConnectionPoint(source, target.x, target.y);
+    const end = getRosGraphConnectionPoint(target, source.x, source.y);
+    const labelX = start.x + (end.x - start.x) * labelProgress + normalX * labelLift;
+    const labelY = start.y + (end.y - start.y) * labelProgress + normalY * labelLift;
+    return {
+      pathData: "M " + start.x.toFixed(1) + " " + start.y.toFixed(1) + " L " + end.x.toFixed(1) + " " + end.y.toFixed(1),
+      labelX,
+      labelY
+    };
+  }
+
+  const controlX = midpointX + normalX * bendOffset;
+  const controlY = midpointY + normalY * bendOffset;
+  const start = getRosGraphConnectionPoint(source, controlX, controlY);
+  const end = getRosGraphConnectionPoint(target, controlX, controlY);
+  const inverseT = 1 - labelProgress;
+  const curveX = inverseT * inverseT * start.x + 2 * inverseT * labelProgress * controlX + labelProgress * labelProgress * end.x;
+  const curveY = inverseT * inverseT * start.y + 2 * inverseT * labelProgress * controlY + labelProgress * labelProgress * end.y;
+  const side = Math.sign(bendOffset) || 1;
+  return {
+    pathData: "M " + start.x.toFixed(1) + " " + start.y.toFixed(1) + " Q " + controlX.toFixed(1) + " " + controlY.toFixed(1) + " " + end.x.toFixed(1) + " " + end.y.toFixed(1),
+    labelX: curveX + normalX * labelLift * side,
+    labelY: curveY + normalY * labelLift * side
+  };
+}
+
 function renderRosGraphCanvas(visible: RosGraphVisibleData): void {
   elements.rosGraphViewportGroup.replaceChildren();
   rosGraphContentBounds = createRosGraphBounds(visible.entities);
@@ -3697,7 +3877,8 @@ function renderRosGraphCanvas(visible: RosGraphVisibleData): void {
   elements.rosGraphEmpty.textContent = emptyText;
   elements.rosGraphEmpty.hidden = emptyText.length === 0;
 
-  if (!rosGraphSnapshot || visible.entities.length === 0) {
+  const activeView = getActiveRosGraphView();
+  if (!activeView || visible.entities.length === 0) {
     applyRosGraphTransform();
     return;
   }
@@ -3705,21 +3886,26 @@ function renderRosGraphCanvas(visible: RosGraphVisibleData): void {
   syncRosGraphSelection(visible.entityIds);
   const focusIds = getRosGraphFocusIds();
   const hasSelection = focusIds.size > 0;
+  const nodeCommunicationKeys = new Set<string>(
+    visible.edges
+      .filter((edge) => edge.kind === "nodeCommunication")
+      .map((edge) => edge.sourceId + "->" + edge.targetId)
+  );
 
   for (const edge of visible.edges) {
-    const source = rosGraphSnapshot.entityById.get(edge.sourceId);
-    const target = rosGraphSnapshot.entityById.get(edge.targetId);
+    const source = activeView.entityById.get(edge.sourceId);
+    const target = activeView.entityById.get(edge.targetId);
     if (!source || !target) {
       continue;
     }
 
-    const start = getRosGraphConnectionPoint(source, target.x, target.y);
-    const end = getRosGraphConnectionPoint(target, source.x, source.y);
+    const hasReverse = edge.kind === "nodeCommunication" && nodeCommunicationKeys.has(edge.targetId + "->" + edge.sourceId);
+    const bendDirection = edge.sourceId.localeCompare(edge.targetId) < 0 ? 1 : -1;
+    const bendOffset = hasReverse ? bendDirection * 38 : 0;
+    const labelProgress = hasReverse ? (bendDirection > 0 ? 0.34 : 0.66) : 0.5;
+    const geometry = getRosGraphEdgeGeometry(source, target, bendOffset, labelProgress, hasReverse ? 18 : 14);
     const path = document.createElementNS(SVG_NS, "path");
-    path.setAttribute(
-      "d",
-      "M " + start.x.toFixed(1) + " " + start.y.toFixed(1) + " L " + end.x.toFixed(1) + " " + end.y.toFixed(1)
-    );
+    path.setAttribute("d", geometry.pathData);
     path.classList.add("ros-graph-edge");
     if (hasSelection) {
       if (edge.sourceId === rosGraphSelectedId || edge.targetId === rosGraphSelectedId) {
@@ -3728,7 +3914,27 @@ function renderRosGraphCanvas(visible: RosGraphVisibleData): void {
         path.classList.add("is-dimmed");
       }
     }
+
+    if (edge.kind === "nodeCommunication" && edge.labels && edge.labels.length > 0) {
+      const edgeTitle = document.createElementNS(SVG_NS, "title");
+      edgeTitle.textContent = edge.labels.join("\n");
+      path.appendChild(edgeTitle);
+    }
+
     elements.rosGraphViewportGroup.appendChild(path);
+
+    if (shouldRenderRosGraphEdgeLabel(edge, hasSelection)) {
+      const label = document.createElementNS(SVG_NS, "text");
+      label.classList.add("ros-graph-edge-label");
+      label.setAttribute("x", geometry.labelX.toFixed(1));
+      label.setAttribute("y", geometry.labelY.toFixed(1));
+      label.textContent = rosGraphEdgeLabelText(edge.labels ?? []);
+      label.classList.add("is-highlighted");
+      const labelTitle = document.createElementNS(SVG_NS, "title");
+      labelTitle.textContent = (edge.labels ?? []).join("\n");
+      label.appendChild(labelTitle);
+      elements.rosGraphViewportGroup.appendChild(label);
+    }
   }
 
   const orderedEntities = visible.entities.slice().sort((left, right) => {
@@ -3798,6 +4004,7 @@ function renderRosGraphCanvas(visible: RosGraphVisibleData): void {
 function renderRosGraphModal(): void {
   const refreshLabel = t(currentLanguage, "button.refresh");
   const fitLabel = t(currentLanguage, "button.fitView");
+  const modeLabel = t(currentLanguage, rosGraphViewMode === "detail" ? "button.showRosGraphNodeConnections" : "button.showRosGraphDetail");
   const closeLabel = t(currentLanguage, "button.close");
   elements.rosGraphSearch.value = rosGraphSearchQuery;
   elements.rosGraphSearch.placeholder = t(currentLanguage, "label.rosGraphSearch");
@@ -3806,9 +4013,14 @@ function renderRosGraphModal(): void {
   elements.rosGraphRefreshBtn.setAttribute("aria-label", refreshLabel);
   elements.rosGraphFitBtn.title = fitLabel;
   elements.rosGraphFitBtn.setAttribute("aria-label", fitLabel);
+  elements.rosGraphModeBtn.title = modeLabel;
+  elements.rosGraphModeBtn.setAttribute("aria-label", modeLabel);
+  elements.rosGraphModeBtn.setAttribute("aria-pressed", rosGraphViewMode === "nodeCommunication" ? "true" : "false");
+  elements.rosGraphModeBtn.classList.toggle("is-active", rosGraphViewMode === "nodeCommunication");
   elements.rosGraphCloseBtn.title = closeLabel;
   elements.rosGraphCloseBtn.setAttribute("aria-label", closeLabel);
   elements.rosGraphRefreshBtn.disabled = !rosClient.isConnected() || rosGraphBusy;
+  elements.rosGraphModeBtn.disabled = !rosGraphSnapshot;
   const visible = getRosGraphVisibleData();
   elements.rosGraphFitBtn.disabled = visible.entities.length === 0;
   elements.rosGraphSearch.disabled = !rosClient.isConnected() && !rosGraphSnapshot;
@@ -3837,6 +4049,7 @@ elements.plannedTrajectoryToggleBtn.innerHTML = TRAJ_ICON_PLAN_PATH;
 elements.rosGraphToggleBtn.innerHTML = ROS_GRAPH_ICON;
 elements.rosGraphRefreshBtn.innerHTML = ROS_GRAPH_REFRESH_ICON;
 elements.rosGraphFitBtn.innerHTML = ROS_GRAPH_FIT_ICON;
+elements.rosGraphModeBtn.innerHTML = ROS_GRAPH_MODE_ICON;
 elements.rosGraphCloseBtn.innerHTML = ROS_GRAPH_CLOSE_ICON;
 elements.resetViewBtn.innerHTML = VIEW_ICON_RESET;
 updatePlannedTrajectoryToggleUi();
@@ -4005,6 +4218,10 @@ elements.rosGraphRefreshBtn.addEventListener("click", () => {
 
 elements.rosGraphFitBtn.addEventListener("click", () => {
   fitRosGraphToView();
+});
+
+elements.rosGraphModeBtn.addEventListener("click", () => {
+  toggleRosGraphViewMode();
 });
 
 elements.rosGraphSearch.addEventListener("input", () => {

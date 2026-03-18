@@ -1,4 +1,4 @@
-﻿export type Language = "en" | "zh";
+export type Language = "en" | "zh";
 export type ThemeMode = "dark" | "light";
 
 const LANGUAGE_STORAGE_KEY = "webrviz-language";
@@ -55,6 +55,8 @@ const translations: Record<Language, TranslationMap> = {
     "button.hideRosGraph": "Hide ROS Graph",
     "button.refresh": "Refresh",
     "button.fitView": "Fit View",
+    "button.showRosGraphNodeConnections": "Show node communication graph",
+    "button.showRosGraphDetail": "Show detailed graph",
     "modal.detailTitle": "DETAIL",
     "modal.rosGraphTitle": "ROS Graph",
     "status.disconnected": "disconnected",
@@ -87,6 +89,7 @@ const translations: Record<Language, TranslationMap> = {
     "detail.rosGraphType": "Message Type",
     "state.notConnected": "not connected",
     "state.rosGraphHint": "Select a node or topic to inspect details",
+    "state.rosGraphNodeHint": "Select a node to inspect details",
     "state.rosGraphLoading": "Loading ROS graph...",
     "state.rosGraphEmpty": "No nodes or topics found",
     "state.rosGraphNoMatch": "No graph items match the current search",
@@ -155,8 +158,10 @@ const translations: Record<Language, TranslationMap> = {
     "button.hideRightSidebar": "隐藏右侧栏",
     "button.showRosGraph": "显示 ROS 图谱",
     "button.hideRosGraph": "隐藏 ROS 图谱",
-    "button.refresh": "刷新",
-    "button.fitView": "适配视图",
+    "button.refresh": "\u5237\u65b0",
+    "button.fitView": "\u9002\u914d\u89c6\u56fe",
+    "button.showRosGraphNodeConnections": "\u663e\u793a\u8282\u70b9\u901a\u4fe1\u56fe",
+    "button.showRosGraphDetail": "\u663e\u793a\u8be6\u7ec6\u56fe\u8c31",
     "modal.detailTitle": "详情",
     "modal.rosGraphTitle": "ROS 图谱",
     "status.disconnected": "未连接",
@@ -187,11 +192,12 @@ const translations: Record<Language, TranslationMap> = {
     "detail.rosGraphSubscribers": "订阅者",
     "detail.rosGraphServices": "服务",
     "detail.rosGraphType": "消息类型",
-    "state.notConnected": "未连接",
-    "state.rosGraphHint": "选择一个节点或话题以查看详情",
-    "state.rosGraphLoading": "正在加载 ROS 图谱...",
-    "state.rosGraphEmpty": "没有发现节点或话题",
-    "state.rosGraphNoMatch": "当前搜索没有匹配的图谱项",
+    "state.notConnected": "\u672a\u8fde\u63a5",
+    "state.rosGraphHint": "\u9009\u62e9\u4e00\u4e2a\u8282\u70b9\u6216\u8bdd\u9898\u4ee5\u67e5\u770b\u8be6\u7ec6\u4fe1\u606f",
+    "state.rosGraphNodeHint": "\u9009\u62e9\u4e00\u4e2a\u8282\u70b9\u4ee5\u67e5\u770b\u8be6\u7ec6\u4fe1\u606f",
+    "state.rosGraphLoading": "\u6b63\u5728\u52a0\u8f7d ROS \u56fe\u8c31...",
+    "state.rosGraphEmpty": "\u6ca1\u6709\u53d1\u73b0\u8282\u70b9\u6216\u8bdd\u9898",
+    "state.rosGraphNoMatch": "\u5f53\u524d\u641c\u7d22\u6ca1\u6709\u5339\u914d\u7684\u56fe\u8c31\u9879",
     "state.rosGraphRefreshFailed": "加载 ROS 图谱失败: {detail}",
     "state.rosGraphPartial": "有 {count} 个节点加载失败",
     "state.rosGraphUpdatedAt": "更新于 {time}",
