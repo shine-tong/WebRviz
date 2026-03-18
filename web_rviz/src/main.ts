@@ -8,6 +8,7 @@ import { loadRobotModel } from "./visualization/robotLoader";
 import { RobotJointConnection, RobotJointDetail, RobotLinkDetail, SceneManager } from "./visualization/sceneManager";
 import { applyStaticTranslations, applyTheme, Language, loadLanguage, loadTheme, saveLanguage, saveTheme, t, ThemeMode } from "./uiSettings";
 import { enhanceSelect, refreshEnhancedSelect } from "./customSelect";
+import { TrajectoryChartSeries, TrajectoryChartTheme, renderTrajectoryLineChart } from "./trajectoryCharts";
 
 interface AppElements {
   appRoot: HTMLElement;
@@ -23,6 +24,7 @@ interface AppElements {
   sidebarToggleBtn: HTMLButtonElement;
   plannedTrajectoryToggleBtn: HTMLButtonElement;
   rosGraphToggleBtn: HTMLButtonElement;
+  trajectoryChartsToggleBtn: HTMLButtonElement;
   resetViewBtn: HTMLButtonElement;
   rightSidebarToggleBtn: HTMLButtonElement;
   fixedFrameValue: HTMLElement;
@@ -31,9 +33,15 @@ interface AppElements {
   viewport: HTMLElement;
   jointValues: HTMLElement;
   jointAngleUnit: HTMLSelectElement;
+  jointAngleDegBtn: HTMLButtonElement;
+  jointAngleRadBtn: HTMLButtonElement;
   cartesianFrame: HTMLSelectElement;
   cartesianLengthUnit: HTMLSelectElement;
+  cartesianLengthMmBtn: HTMLButtonElement;
+  cartesianLengthMBtn: HTMLButtonElement;
   cartesianAngleUnit: HTMLSelectElement;
+  cartesianAngleDegBtn: HTMLButtonElement;
+  cartesianAngleRadBtn: HTMLButtonElement;
   cartesianValues: HTMLElement;
   tfToggleAllBtn: HTMLButtonElement;
   tfSelectBtn: HTMLButtonElement;
@@ -69,6 +77,30 @@ interface AppElements {
   rosGraphViewportGroup: SVGGElement;
   rosGraphEmpty: HTMLElement;
   rosGraphDetail: HTMLElement;
+  trajectoryChartsModal: HTMLElement;
+  trajectoryChartsModalBackdrop: HTMLElement;
+  trajectoryChartsCloseBtn: HTMLButtonElement;
+  trajectoryChartsMeta: HTMLElement;
+  trajectoryChartsStatusValue: HTMLElement;
+  trajectoryChartsDurationValue: HTMLElement;
+  trajectoryChartsSamplesValue: HTMLElement;
+  trajectoryChartsTcpFrameValue: HTMLElement;
+  trajectoryChartsJointChips: HTMLElement;
+  trajectoryChartsShowAllBtn: HTMLButtonElement;
+  trajectoryChartsResetBtn: HTMLButtonElement;
+  trajectoryChartsPositionDegBtn: HTMLButtonElement;
+  trajectoryChartsPositionRadBtn: HTMLButtonElement;
+  trajectoryChartsTcpMmBtn: HTMLButtonElement;
+  trajectoryChartsTcpMBtn: HTMLButtonElement;
+  trajectoryChartsVelocityDegBtn: HTMLButtonElement;
+  trajectoryChartsVelocityRadBtn: HTMLButtonElement;
+  trajectoryChartsAccelerationDegBtn: HTMLButtonElement;
+  trajectoryChartsAccelerationRadBtn: HTMLButtonElement;
+  trajectoryChartsPositionCanvas: HTMLCanvasElement;
+  trajectoryChartsTcpCanvas: HTMLCanvasElement;
+  trajectoryChartsVelocityCanvas: HTMLCanvasElement;
+  trajectoryChartsAccelerationCanvas: HTMLCanvasElement;
+  trajectoryChartsTorqueCanvas: HTMLCanvasElement;
 }
 
 interface TopicSubscriptions {
@@ -92,6 +124,52 @@ interface TrajectoryFrame {
   t: number;
   names: string[];
   positions: number[];
+}
+
+interface JointStatePayload {
+  names: string[];
+  positions: number[];
+  velocities?: number[];
+  efforts?: number[];
+}
+
+interface TrajectoryPointPayload {
+  positions?: number[];
+  velocities?: number[];
+  accelerations?: number[];
+  effort?: number[];
+  time_from_start?: {
+    secs?: number;
+    nsecs?: number;
+    sec?: number;
+    nanosec?: number;
+  };
+}
+
+interface MotionSample {
+  t: number;
+  positions: number[];
+  velocities?: number[];
+  accelerations?: number[];
+  efforts?: number[];
+  tcpPosition: { x: number; y: number; z: number } | null;
+}
+
+interface ActiveMotionSegment {
+  jointNames: string[];
+  tcpFrame: string;
+  startedAt: number;
+  samples: MotionSample[];
+  lastMovementAt: number;
+  lastSampleAt: number;
+}
+
+interface MotionSegmentSnapshot {
+  jointNames: string[];
+  tcpFrame: string;
+  startedAt: number;
+  endedAt: number;
+  samples: MotionSample[];
 }
 
 interface LogEntry {
@@ -233,6 +311,7 @@ const ROS_GRAPH_REFRESH_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><pat
 const ROS_GRAPH_FIT_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4M16 4h4v4M20 16v4h-4M8 20H4v-4" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 9l-5-5M15 9l5-5M15 15l5 5M9 15l-5 5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ROS_GRAPH_MODE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6.5" cy="12" r="2"/><circle cx="17.5" cy="6.5" r="2"/><circle cx="17.5" cy="17.5" r="2"/><path d="M8.6 11.2 14.9 7.4M8.6 12.8 14.9 16.6M10.6 12h2.8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ROS_GRAPH_CLOSE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6 18 18M18 6 6 18" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const TRAJECTORY_CHARTS_ICON = '<svg viewBox="0 0 1024 1024" aria-hidden="true"><path d="M527.8 487.7l-15.3 16.6c-6.2-3.5-13.3-5.7-21-5.7-5.4 0-10.5 1.1-15.3 3L416.1 413c-0.1-0.2-0.4-0.3-0.5-0.5 6.7-6.5 10.9-15.6 10.9-25.6 0-19.8-16.1-35.8-35.8-35.8-19.8 0-35.8 16.1-35.8 35.8 0 7.1 2.2 13.8 5.8 19.3L291.8 475c-6-4.4-13.2-7.1-21.2-7.1-19.8 0-35.8 16.1-35.8 35.8 0 19.8 16.1 35.8 35.8 35.8 19.8 0 35.8-16.1 35.8-35.8 0-4.7-1-9.2-2.6-13.3l71.4-71.4c4.7 2.3 9.9 3.6 15.4 3.6 2.9 0 5.7-0.4 8.4-1.1 0.3 0.8 0.5 1.6 1 2.3l60.1 88.5c-7 7.6-11.4 17.7-11.4 28.9 0 23.6 19.2 42.8 42.8 42.8 23.6 0 42.8-19.2 42.8-42.8 0-8.9-2.7-17.1-7.4-24l15.2-16.5-14.3-13z m-257.2 32.5c-9 0-16.4-7.3-16.4-16.4 0-9 7.3-16.4 16.4-16.4s16.4 7.3 16.4 16.4c0 9-7.4 16.4-16.4 16.4z m120.1-116.9c-9 0-16.4-7.3-16.4-16.4 0-9 7.3-16.4 16.4-16.4 9 0 16.4 7.3 16.4 16.4-0.1 9-7.4 16.4-16.4 16.4zM664 302.5c-25.5 0-46.3 20.8-46.3 46.3 0 8.4 2.4 16.2 6.4 23l-55.3 59.9 21.5 19.8 55.5-60.2c5.6 2.4 11.8 3.8 18.2 3.8 25.5 0 46.3-20.8 46.3-46.3 0.1-25.6-20.7-46.3-46.3-46.3z m0 63.4c-9.4 0-17.1-7.7-17.1-17.1 0-9.4 7.7-17.1 17.1-17.1 9.4 0 17.1 7.7 17.1 17.1 0.1 9.4-7.6 17.1-17.1 17.1z" fill="currentColor"/><path d="M854.8 578.5l-67.3-97.6c35.3-33 57.6-79.9 57.6-132.1 0-99.9-81-180.9-180.9-180.9s-180.9 81-180.9 180.9 81 180.9 180.9 180.9c26.8 0 52.2-6 75-16.4l67.8 98.2c8.8 12.7 26.4 15.9 39.1 7.2l1.6-1.1c12.6-8.8 15.8-26.4 7.1-39.1zM664 494.3c-80.4 0-145.5-65.2-145.5-145.5S583.7 203.2 664 203.2s145.5 65.2 145.5 145.5S744.4 494.3 664 494.3z" fill="currentColor"/><path d="M716.6 649.1c0 10.9-8.9 19.7-19.7 19.7H237.3c-10.9 0-19.7-8.9-19.7-19.7V265.8c0-10.9 8.9-19.7 19.7-19.7h221.4c5.5-11.3 11.9-22.2 19.1-32.4H220.4c-23 0-41.8 18.8-41.8 41.8v412.4c0 23 18.8 41.8 41.8 41.8h216.9v51.8H319.2c-12.7 0-23.1 10.4-23.1 23.1v1.6c0 12.7 10.4 23.1 23.1 23.1h295.7c12.7 0 23.1-10.4 23.1-23.1v-1.6c0-12.7-10.4-23.1-23.1-23.1H496.8v-51.8h216.9c23 0 41.8-18.8 41.8-41.8v-84.7c-12.5 4.2-25.5 7.5-38.9 9.6v56.3z" fill="currentColor"/></svg>';
 const ROS_GRAPH_MIN_SCALE = 0.3;
 const ROS_GRAPH_MAX_SCALE = 2.4;
 const ROS_GRAPH_LAYER_GAP = 280;
@@ -266,6 +345,7 @@ function getElements(): AppElements {
     sidebarToggleBtn: byId<HTMLButtonElement>("sidebarToggleBtn"),
     plannedTrajectoryToggleBtn: byId<HTMLButtonElement>("plannedTrajectoryToggleBtn"),
     rosGraphToggleBtn: byId<HTMLButtonElement>("rosGraphToggleBtn"),
+    trajectoryChartsToggleBtn: byId<HTMLButtonElement>("trajectoryChartsToggleBtn"),
     resetViewBtn: byId<HTMLButtonElement>("resetViewBtn"),
     rightSidebarToggleBtn: byId<HTMLButtonElement>("rightSidebarToggleBtn"),
     fixedFrameValue: byId<HTMLElement>("fixedFrameValue"),
@@ -274,9 +354,15 @@ function getElements(): AppElements {
     viewport: byId<HTMLElement>("viewport"),
     jointValues: byId<HTMLElement>("jointValues"),
     jointAngleUnit: byId<HTMLSelectElement>("jointAngleUnit"),
+    jointAngleDegBtn: byId<HTMLButtonElement>("jointAngleDegBtn"),
+    jointAngleRadBtn: byId<HTMLButtonElement>("jointAngleRadBtn"),
     cartesianFrame: byId<HTMLSelectElement>("cartesianFrame"),
     cartesianLengthUnit: byId<HTMLSelectElement>("cartesianLengthUnit"),
+    cartesianLengthMmBtn: byId<HTMLButtonElement>("cartesianLengthMmBtn"),
+    cartesianLengthMBtn: byId<HTMLButtonElement>("cartesianLengthMBtn"),
     cartesianAngleUnit: byId<HTMLSelectElement>("cartesianAngleUnit"),
+    cartesianAngleDegBtn: byId<HTMLButtonElement>("cartesianAngleDegBtn"),
+    cartesianAngleRadBtn: byId<HTMLButtonElement>("cartesianAngleRadBtn"),
     cartesianValues: byId<HTMLElement>("cartesianValues"),
     tfToggleAllBtn: byId<HTMLButtonElement>("tfToggleAllBtn"),
     tfSelectBtn: byId<HTMLButtonElement>("tfSelectBtn"),
@@ -311,7 +397,31 @@ function getElements(): AppElements {
     rosGraphSvg: byId<SVGSVGElement>("rosGraphSvg"),
     rosGraphViewportGroup: byId<SVGGElement>("rosGraphViewportGroup"),
     rosGraphEmpty: byId<HTMLElement>("rosGraphEmpty"),
-    rosGraphDetail: byId<HTMLElement>("rosGraphDetail")
+    rosGraphDetail: byId<HTMLElement>("rosGraphDetail"),
+    trajectoryChartsModal: byId<HTMLElement>("trajectoryChartsModal"),
+    trajectoryChartsModalBackdrop: byId<HTMLElement>("trajectoryChartsModalBackdrop"),
+    trajectoryChartsCloseBtn: byId<HTMLButtonElement>("trajectoryChartsCloseBtn"),
+    trajectoryChartsMeta: byId<HTMLElement>("trajectoryChartsMeta"),
+    trajectoryChartsStatusValue: byId<HTMLElement>("trajectoryChartsStatusValue"),
+    trajectoryChartsDurationValue: byId<HTMLElement>("trajectoryChartsDurationValue"),
+    trajectoryChartsSamplesValue: byId<HTMLElement>("trajectoryChartsSamplesValue"),
+    trajectoryChartsTcpFrameValue: byId<HTMLElement>("trajectoryChartsTcpFrameValue"),
+    trajectoryChartsJointChips: byId<HTMLElement>("trajectoryChartsJointChips"),
+    trajectoryChartsShowAllBtn: byId<HTMLButtonElement>("trajectoryChartsShowAllBtn"),
+    trajectoryChartsResetBtn: byId<HTMLButtonElement>("trajectoryChartsResetBtn"),
+    trajectoryChartsPositionDegBtn: byId<HTMLButtonElement>("trajectoryChartsPositionDegBtn"),
+    trajectoryChartsPositionRadBtn: byId<HTMLButtonElement>("trajectoryChartsPositionRadBtn"),
+    trajectoryChartsTcpMmBtn: byId<HTMLButtonElement>("trajectoryChartsTcpMmBtn"),
+    trajectoryChartsTcpMBtn: byId<HTMLButtonElement>("trajectoryChartsTcpMBtn"),
+    trajectoryChartsVelocityDegBtn: byId<HTMLButtonElement>("trajectoryChartsVelocityDegBtn"),
+    trajectoryChartsVelocityRadBtn: byId<HTMLButtonElement>("trajectoryChartsVelocityRadBtn"),
+    trajectoryChartsAccelerationDegBtn: byId<HTMLButtonElement>("trajectoryChartsAccelerationDegBtn"),
+    trajectoryChartsAccelerationRadBtn: byId<HTMLButtonElement>("trajectoryChartsAccelerationRadBtn"),
+    trajectoryChartsPositionCanvas: byId<HTMLCanvasElement>("trajectoryChartsPositionCanvas"),
+    trajectoryChartsTcpCanvas: byId<HTMLCanvasElement>("trajectoryChartsTcpCanvas"),
+    trajectoryChartsVelocityCanvas: byId<HTMLCanvasElement>("trajectoryChartsVelocityCanvas"),
+    trajectoryChartsAccelerationCanvas: byId<HTMLCanvasElement>("trajectoryChartsAccelerationCanvas"),
+    trajectoryChartsTorqueCanvas: byId<HTMLCanvasElement>("trajectoryChartsTorqueCanvas")
   };
 }
 
@@ -389,6 +499,17 @@ let rosGraphPanY = 0;
 let rosGraphScale = 1;
 let rosGraphContentBounds: RosGraphBounds | null = null;
 let rosGraphPointerState: { pointerId: number; startX: number; startY: number; panX: number; panY: number } | null = null;
+let trajectoryChartsOpen = false;
+let trajectoryChartsPositionUnit: AngleUnit = "deg";
+let trajectoryChartsTcpUnit: LengthUnit = "mm";
+let trajectoryChartsVelocityUnit: AngleUnit = "deg";
+let trajectoryChartsAccelerationUnit: AngleUnit = "deg";
+let activeMotionSegment: ActiveMotionSegment | null = null;
+let latestMotionSegment: MotionSegmentSnapshot | null = null;
+let motionLastPositions: Map<string, number> | null = null;
+let trajectoryChartsVisibleJoints = new Set<string>();
+let trajectoryChartsJointSignature = "";
+let pendingTrajectoryChartsRender = false;
 
 
 function formatError(error: unknown): string {
@@ -468,6 +589,15 @@ function updateRosGraphToggleUi(): void {
   elements.rosGraphToggleBtn.classList.toggle("is-active", rosGraphOpen);
 }
 
+function updateTrajectoryChartsToggleUi(): void {
+  const toggleKey = trajectoryChartsOpen ? "button.hideTrajectoryCharts" : "button.showTrajectoryCharts";
+  const label = t(currentLanguage, toggleKey as "button.hideTrajectoryCharts" | "button.showTrajectoryCharts");
+  elements.trajectoryChartsToggleBtn.title = label;
+  elements.trajectoryChartsToggleBtn.setAttribute("aria-label", label);
+  elements.trajectoryChartsToggleBtn.setAttribute("aria-pressed", trajectoryChartsOpen ? "true" : "false");
+  elements.trajectoryChartsToggleBtn.classList.toggle("is-active", trajectoryChartsOpen);
+}
+
 function updateResetViewButtonUi(): void {
   const label = t(currentLanguage, "button.resetView");
   elements.resetViewBtn.title = label;
@@ -495,11 +625,13 @@ function refreshUiText(): void {
   updateSidebarToggleUi();
   updatePlannedTrajectoryToggleUi();
   updateRosGraphToggleUi();
+  updateTrajectoryChartsToggleUi();
   updateResetViewButtonUi();
   updateRightSidebarToggleUi();
   updateTabLabels();
   updateStatusLabel(lastConnectionState, lastConnectionDetail);
   renderRosGraphModal();
+  renderTrajectoryChartsModal();
   renderRightPanel();
   updateTrajectoryUi();
 }
@@ -715,24 +847,24 @@ function buildPlannedTrajectoryPathForFrame(
 }
 
 function getCurrentTcpLinkFrame(): string {
-  const directValue = elements.cartesianFrame.value.trim();
-  if (directValue) {
-    return directValue;
-  }
-
   const rememberedValue = cartesianFrame.trim();
   if (rememberedValue) {
     return rememberedValue;
   }
 
+  const preferred = sceneManager.getDefaultEndEffectorFrame().trim();
+  if (preferred) {
+    return preferred;
+  }
+
+  const directValue = elements.cartesianFrame.value.trim();
+  if (directValue) {
+    return directValue;
+  }
+
   const frames = sceneManager.getLinkList();
   if (frames.length === 0) {
     return "";
-  }
-
-  const preferred = sceneManager.getDefaultEndEffectorFrame();
-  if (preferred && frames.includes(preferred)) {
-    return preferred;
   }
 
   return frames[frames.length - 1];
@@ -838,7 +970,7 @@ function updatePlannedTrajectoryFromMoveItResult(resultMessage: {
     planned_trajectory?: {
       joint_trajectory?: {
         joint_names?: string[];
-        points?: Array<{ positions?: number[] }>;
+        points?: TrajectoryPointPayload[];
       };
     };
   };
@@ -852,6 +984,165 @@ function updatePlannedTrajectoryFromMoveItResult(resultMessage: {
   }
 
   queuePlannedTrajectoryFromJointTrajectory(resultMessage.result?.planned_trajectory?.joint_trajectory, "result");
+}
+
+function trajectoryPointTimeToMs(point: TrajectoryPointPayload, fallbackMs: number): number {
+  const secs = typeof point.time_from_start?.secs === "number"
+    ? point.time_from_start.secs
+    : typeof point.time_from_start?.sec === "number"
+      ? point.time_from_start.sec
+      : 0;
+  const nsecs = typeof point.time_from_start?.nsecs === "number"
+    ? point.time_from_start.nsecs
+    : typeof point.time_from_start?.nanosec === "number"
+      ? point.time_from_start.nanosec
+      : 0;
+  const totalMs = secs * 1000 + nsecs / 1e6;
+  return Number.isFinite(totalMs) && totalMs >= 0 ? totalMs : fallbackMs;
+}
+
+function normalizeTrajectoryPointValues(values: number[] | undefined, jointCount: number): number[] | undefined {
+  if (!Array.isArray(values) || values.length === 0) {
+    return undefined;
+  }
+
+  const normalized = new Array<number>(jointCount).fill(Number.NaN);
+  let hasFinite = false;
+  const count = Math.min(jointCount, values.length);
+  for (let index = 0; index < count; index += 1) {
+    const value = values[index];
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      continue;
+    }
+    normalized[index] = value;
+    hasFinite = true;
+  }
+  return hasFinite ? normalized : undefined;
+}
+
+function sampleTcpPositionsForTrajectory(
+  jointNames: string[],
+  points: TrajectoryPointPayload[],
+  tcpFrame: string
+): Array<{ x: number; y: number; z: number } | null> {
+  if (!tcpFrame || jointNames.length === 0 || points.length === 0) {
+    return points.map(() => null);
+  }
+
+  const restoreNames = jointState.map((joint) => joint.name);
+  const restorePositions = jointState.map((joint) => joint.position);
+  const tcpPositions: Array<{ x: number; y: number; z: number } | null> = [];
+
+  try {
+    for (const point of points) {
+      const rawPositions = Array.isArray(point.positions) ? point.positions : [];
+      const names: string[] = [];
+      const positions: number[] = [];
+      const count = Math.min(jointNames.length, rawPositions.length);
+      for (let index = 0; index < count; index += 1) {
+        const value = rawPositions[index];
+        if (typeof value !== "number" || !Number.isFinite(value)) {
+          continue;
+        }
+        names.push(jointNames[index]);
+        positions.push(value);
+      }
+
+      if (names.length === 0) {
+        tcpPositions.push(null);
+        continue;
+      }
+
+      sceneManager.updateJointStates({ name: names, position: positions });
+      const tcpTransform = sceneManager.getRobotRelativeTransform(tcpFrame) ?? sceneManager.getRelativeTransform(tcpFrame);
+      tcpPositions.push(tcpTransform ? {
+        x: tcpTransform.translation.x,
+        y: tcpTransform.translation.y,
+        z: tcpTransform.translation.z
+      } : null);
+    }
+  } finally {
+    if (restoreNames.length > 0) {
+      sceneManager.updateJointStates({ name: restoreNames, position: restorePositions });
+    }
+  }
+
+  return tcpPositions;
+}
+
+function setTrajectoryChartsFromJointTrajectory(jointNames: string[], points: TrajectoryPointPayload[]): void {
+  const normalizedJointNames = orderedUniqueStrings(jointNames);
+  if (normalizedJointNames.length === 0 || points.length === 0) {
+    clearTrajectoryChartsState();
+    if (trajectoryChartsOpen) {
+      renderTrajectoryChartsModal();
+    }
+    return;
+  }
+
+  const tcpFrame = resolveTrajectoryChartsTcpFrame();
+  const tcpPositions = sampleTcpPositionsForTrajectory(normalizedJointNames, points, tcpFrame);
+  const samples: MotionSample[] = [];
+  let lastTimeMs = 0;
+
+  for (let index = 0; index < points.length; index += 1) {
+    const point = points[index];
+    const fallbackMs = index === 0 ? 0 : lastTimeMs + TRAJ_SAMPLE_INTERVAL_MS;
+    const timeMs = Math.max(lastTimeMs, trajectoryPointTimeToMs(point, fallbackMs));
+    lastTimeMs = timeMs;
+    samples.push({
+      t: timeMs,
+      positions: normalizeTrajectoryPointValues(point.positions, normalizedJointNames.length) ?? new Array<number>(normalizedJointNames.length).fill(Number.NaN),
+      velocities: normalizeTrajectoryPointValues(point.velocities, normalizedJointNames.length),
+      accelerations: normalizeTrajectoryPointValues(point.accelerations, normalizedJointNames.length),
+      efforts: normalizeTrajectoryPointValues(point.effort, normalizedJointNames.length),
+      tcpPosition: tcpPositions[index] ?? null
+    });
+  }
+
+  activeMotionSegment = null;
+  motionLastPositions = null;
+  latestMotionSegment = {
+    jointNames: normalizedJointNames,
+    tcpFrame,
+    startedAt: 0,
+    endedAt: lastTimeMs,
+    samples
+  };
+  ensureTrajectoryChartsVisibleJoints(latestMotionSegment);
+  if (trajectoryChartsOpen) {
+    renderTrajectoryChartsModal();
+  }
+}
+
+function updateTrajectoryChartsFromMoveItResult(resultMessage: {
+  status?: { status?: number };
+  result?: {
+    error_code?: { val?: number };
+    planned_trajectory?: {
+      joint_trajectory?: {
+        joint_names?: string[];
+        points?: TrajectoryPointPayload[];
+      };
+    };
+  };
+}): void {
+  const statusCode = typeof resultMessage.status?.status === "number" ? resultMessage.status.status : -1;
+  const errorCode = typeof resultMessage.result?.error_code?.val === "number" ? resultMessage.result.error_code.val : undefined;
+  if (!isMoveItPlanSuccessful(statusCode, errorCode)) {
+    clearTrajectoryChartsState();
+    if (trajectoryChartsOpen) {
+      renderTrajectoryChartsModal();
+    }
+    return;
+  }
+
+  const jointTrajectory = resultMessage.result?.planned_trajectory?.joint_trajectory;
+  const jointNames = Array.isArray(jointTrajectory?.joint_names)
+    ? jointTrajectory.joint_names.filter((name): name is string => typeof name === "string" && name.length > 0)
+    : [];
+  const points = Array.isArray(jointTrajectory?.points) ? jointTrajectory.points : [];
+  setTrajectoryChartsFromJointTrajectory(jointNames, points);
 }
 
 function updatePlannedTrajectoryFromDisplayTrajectory(message: {
@@ -982,9 +1273,6 @@ function subscribeMoveItTopics(): void {
   subscribeIfAvailable(MOVE_GROUP_RESULT_TOPIC, "moveit_msgs/MoveGroupActionResult", (topic) => {
     subscriptions.moveGroupResult = topic;
   }, (message) => {
-    if (!moveItPreviewArmed) {
-      return;
-    }
     const resultMessage = message as {
       status?: { status?: number };
       result?: {
@@ -993,11 +1281,16 @@ function subscribeMoveItTopics(): void {
         planned_trajectory?: {
           joint_trajectory?: {
             joint_names?: string[];
-            points?: Array<{ positions?: number[] }>;
+            points?: TrajectoryPointPayload[];
           };
         };
       };
     };
+
+    updateTrajectoryChartsFromMoveItResult(resultMessage);
+    if (!moveItPreviewArmed) {
+      return;
+    }
 
     const statusCode = typeof resultMessage.status?.status === "number" ? resultMessage.status.status : -1;
     const parts = [
@@ -1863,20 +2156,30 @@ function renderJointValues(): void {
 
 function updateFrameOptions(): void {
   const frames = sceneManager.getLinkList();
+  let shouldRefresh = false;
+
   if (frames.length === 0) {
-    elements.cartesianFrame.innerHTML = "";
-    cartesianFrame = "";
-    lastFrameOptions = [];
-    sceneManager.setEndEffectorFrame("");
-    refreshEnhancedSelect(elements.cartesianFrame);
+    const hadOptions = elements.cartesianFrame.options.length > 0 || lastFrameOptions.length > 0;
+    if (hadOptions) {
+      elements.cartesianFrame.innerHTML = "";
+      lastFrameOptions = [];
+      shouldRefresh = true;
+    }
+    if (cartesianFrame) {
+      cartesianFrame = "";
+      sceneManager.setEndEffectorFrame("");
+    }
+    if (shouldRefresh) {
+      refreshEnhancedSelect(elements.cartesianFrame);
+    }
     return;
   }
 
-  const changed =
+  const optionsChanged =
     frames.length !== lastFrameOptions.length ||
     frames.some((frame, index) => frame !== lastFrameOptions[index]);
 
-  if (changed) {
+  if (optionsChanged) {
     elements.cartesianFrame.innerHTML = "";
     for (const frame of frames) {
       const option = document.createElement("option");
@@ -1884,7 +2187,8 @@ function updateFrameOptions(): void {
       option.textContent = frame;
       elements.cartesianFrame.appendChild(option);
     }
-    lastFrameOptions = frames;
+    lastFrameOptions = [...frames];
+    shouldRefresh = true;
   }
 
   const snapshot = sceneManager.getTfSnapshot();
@@ -1898,17 +2202,37 @@ function updateFrameOptions(): void {
     }
   }
 
-  const preferred =
-    cartesianFrame ||
-    lastTfLink ||
-    sceneManager.getDefaultEndEffectorFrame() ||
-    sceneManager.getRobotBaseFrame() ||
-    sceneManager.getFixedFrame() ||
+  const defaultEndEffectorFrame = sceneManager.getDefaultEndEffectorFrame();
+  const nextFrame =
+    (cartesianFrame && frames.includes(cartesianFrame) ? cartesianFrame : "") ||
+    (defaultEndEffectorFrame && frames.includes(defaultEndEffectorFrame) ? defaultEndEffectorFrame : "") ||
+    (lastTfLink && frames.includes(lastTfLink) ? lastTfLink : "") ||
+    (sceneManager.getRobotBaseFrame() && frames.includes(sceneManager.getRobotBaseFrame())
+      ? sceneManager.getRobotBaseFrame()
+      : "") ||
+    (sceneManager.getFixedFrame() && frames.includes(sceneManager.getFixedFrame())
+      ? sceneManager.getFixedFrame()
+      : "") ||
+    (elements.cartesianFrame.value && frames.includes(elements.cartesianFrame.value)
+      ? elements.cartesianFrame.value
+      : "") ||
+    frames[frames.length - 1] ||
     frames[0];
-  cartesianFrame = frames.includes(preferred) ? preferred : frames[0];
-  elements.cartesianFrame.value = cartesianFrame;
-  sceneManager.setEndEffectorFrame(cartesianFrame);
-  refreshEnhancedSelect(elements.cartesianFrame);
+
+  if (cartesianFrame !== nextFrame) {
+    cartesianFrame = nextFrame;
+    sceneManager.setEndEffectorFrame(cartesianFrame);
+    shouldRefresh = true;
+  }
+
+  if (elements.cartesianFrame.value !== cartesianFrame) {
+    elements.cartesianFrame.value = cartesianFrame;
+    shouldRefresh = true;
+  }
+
+  if (shouldRefresh) {
+    refreshEnhancedSelect(elements.cartesianFrame);
+  }
 }
 function renderCartesianValues(): void {
   if (!cartesianFrame) {
@@ -2390,7 +2714,10 @@ function updateTrajectoryUi(): void {
   elements.trajClearBtn.title = clearLabel;
   elements.trajClearBtn.setAttribute("aria-label", clearLabel);
 
-  elements.cartesianFrame.disabled = isPlaying;
+  if (elements.cartesianFrame.disabled !== isPlaying) {
+    elements.cartesianFrame.disabled = isPlaying;
+    refreshEnhancedSelect(elements.cartesianFrame);
+  }
 }
 function applyJointSnapshot(names: string[], positions: number[]): void {
   const payload = { name: names, position: positions };
@@ -2489,6 +2816,7 @@ function startPlayback(): void {
     playbackIndex = 0;
   }
 
+  motionLastPositions = null;
   isRecording = false;
   recordArmed = false;
   isPlaying = true;
@@ -2502,6 +2830,7 @@ function startPlayback(): void {
 }
 function clearTrajectory(): void {
   stopPlayback();
+  motionLastPositions = null;
   isRecording = false;
   isPlaybackPaused = false;
   recordArmed = false;
@@ -2627,6 +2956,7 @@ function recordTrajectorySnapshot(message: unknown): void {
 }
 function renderRightPanel(): void {
   if (rightPanelTab === "robot") {
+    updateRightPanelUnitButtons();
     renderJointValues();
     updateFrameOptions();
     renderCartesianValues();
@@ -2684,6 +3014,574 @@ function updateJointStateSnapshot(message: unknown): void {
     next.push({ name: payload.name[index], position: payload.position[index] });
   }
   jointState = next;
+}
+
+function orderedUniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function rateUnitLabel(unit: AngleUnit): string {
+  return unit === "deg" ? "deg/s" : "rad/s";
+}
+
+function accelerationUnitLabel(unit: AngleUnit): string {
+  return unit === "deg" ? "deg/s^2" : "rad/s^2";
+}
+
+function parseJointStatePayload(message: unknown): JointStatePayload | null {
+  const payload = message as { name?: unknown; position?: unknown; velocity?: unknown; effort?: unknown };
+  if (!payload || !Array.isArray(payload.name) || !Array.isArray(payload.position)) {
+    return null;
+  }
+
+  const names: string[] = [];
+  const positions: number[] = [];
+  const velocities: number[] = [];
+  const efforts: number[] = [];
+  const velocityArray = Array.isArray(payload.velocity) ? payload.velocity : null;
+  const effortArray = Array.isArray(payload.effort) ? payload.effort : null;
+  const count = Math.min(payload.name.length, payload.position.length);
+  for (let index = 0; index < count; index += 1) {
+    const name = payload.name[index];
+    const position = payload.position[index];
+    if (typeof name !== "string" || !name || typeof position !== "number" || !Number.isFinite(position)) {
+      continue;
+    }
+    names.push(name);
+    positions.push(position);
+    const velocity = velocityArray && typeof velocityArray[index] === "number" && Number.isFinite(velocityArray[index])
+      ? velocityArray[index]
+      : Number.NaN;
+    velocities.push(velocity);
+    const effort = effortArray && typeof effortArray[index] === "number" && Number.isFinite(effortArray[index])
+      ? effortArray[index]
+      : Number.NaN;
+    efforts.push(effort);
+  }
+
+  if (names.length === 0) {
+    return null;
+  }
+
+  return {
+    names,
+    positions,
+    velocities: velocities.some((value) => Number.isFinite(value)) ? velocities : undefined,
+    efforts: efforts.some((value) => Number.isFinite(value)) ? efforts : undefined
+  };
+}
+
+function resolveTrajectoryChartsTcpFrame(): string {
+  if (cartesianFrame) {
+    return cartesianFrame;
+  }
+  return sceneManager.getDefaultEndEffectorFrame() || "";
+}
+
+function trajectoryChartsSegmentSignature(segment: { jointNames: string[] } | null): string {
+  return segment ? segment.jointNames.join("|") : "";
+}
+
+function defaultTrajectoryChartsVisibleJoints(jointNames: string[]): Set<string> {
+  return new Set(jointNames.length > 6 ? jointNames.slice(0, 6) : jointNames);
+}
+
+function ensureTrajectoryChartsVisibleJoints(segment: { jointNames: string[] } | null): void {
+  if (!segment) {
+    trajectoryChartsJointSignature = "";
+    trajectoryChartsVisibleJoints.clear();
+    return;
+  }
+
+  const signature = trajectoryChartsSegmentSignature(segment);
+  if (signature !== trajectoryChartsJointSignature) {
+    trajectoryChartsJointSignature = signature;
+    trajectoryChartsVisibleJoints = defaultTrajectoryChartsVisibleJoints(segment.jointNames);
+    return;
+  }
+
+  const validNames = new Set(segment.jointNames);
+  for (const name of Array.from(trajectoryChartsVisibleJoints)) {
+    if (!validNames.has(name)) {
+      trajectoryChartsVisibleJoints.delete(name);
+    }
+  }
+
+  if (trajectoryChartsVisibleJoints.size === 0 && segment.jointNames.length > 0) {
+    trajectoryChartsVisibleJoints = defaultTrajectoryChartsVisibleJoints(segment.jointNames);
+  }
+}
+
+function alignNumericValues(sourceNames: string[], sourceValues: number[], jointNames: string[]): number[] {
+  const valueByName = new Map<string, number>();
+  const count = Math.min(sourceNames.length, sourceValues.length);
+  for (let index = 0; index < count; index += 1) {
+    valueByName.set(sourceNames[index], sourceValues[index]);
+  }
+  return jointNames.map((name) => {
+    const value = valueByName.get(name);
+    return value === undefined ? Number.NaN : value;
+  });
+}
+
+function createActiveMotionSegment(payload: JointStatePayload, now: number): ActiveMotionSegment {
+  const jointNames = orderedUniqueStrings(payload.names);
+  return {
+    jointNames,
+    tcpFrame: resolveTrajectoryChartsTcpFrame(),
+    startedAt: now,
+    samples: [],
+    lastMovementAt: now,
+    lastSampleAt: -TRAJ_SAMPLE_INTERVAL_MS
+  };
+}
+
+function buildMotionSample(segment: ActiveMotionSegment, payload: JointStatePayload, now: number): MotionSample {
+  const tcpTransform = segment.tcpFrame ? sceneManager.getRelativeTransform(segment.tcpFrame) : null;
+  return {
+    t: Math.max(0, now - segment.startedAt),
+    positions: alignNumericValues(payload.names, payload.positions, segment.jointNames),
+    velocities: payload.velocities ? alignNumericValues(payload.names, payload.velocities, segment.jointNames) : undefined,
+    accelerations: undefined,
+    efforts: payload.efforts ? alignNumericValues(payload.names, payload.efforts, segment.jointNames) : undefined,
+    tcpPosition: tcpTransform ? {
+      x: tcpTransform.translation.x,
+      y: tcpTransform.translation.y,
+      z: tcpTransform.translation.z
+    } : null
+  };
+}
+
+function appendMotionSample(segment: ActiveMotionSegment, payload: JointStatePayload, now: number, force = false): void {
+  if (!force && segment.samples.length > 0 && now - segment.lastSampleAt < TRAJ_SAMPLE_INTERVAL_MS) {
+    return;
+  }
+  segment.samples.push(buildMotionSample(segment, payload, now));
+  segment.lastSampleAt = now;
+}
+
+function finalizeMotionSegment(segment: ActiveMotionSegment, endedAt: number): MotionSegmentSnapshot {
+  return {
+    jointNames: segment.jointNames.slice(),
+    tcpFrame: segment.tcpFrame,
+    startedAt: segment.startedAt,
+    endedAt,
+    samples: segment.samples.map((sample) => ({
+      t: sample.t,
+      positions: sample.positions.slice(),
+      velocities: sample.velocities ? sample.velocities.slice() : undefined,
+      accelerations: sample.accelerations ? sample.accelerations.slice() : undefined,
+      efforts: sample.efforts ? sample.efforts.slice() : undefined,
+      tcpPosition: sample.tcpPosition ? { ...sample.tcpPosition } : null
+    }))
+  };
+}
+
+function clearTrajectoryChartsState(): void {
+  activeMotionSegment = null;
+  latestMotionSegment = null;
+  motionLastPositions = null;
+  trajectoryChartsVisibleJoints.clear();
+  trajectoryChartsJointSignature = "";
+  pendingTrajectoryChartsRender = false;
+  clearElement(elements.trajectoryChartsJointChips);
+  elements.trajectoryChartsJointChips.removeAttribute("data-signature");
+  const jointToolbar = elements.trajectoryChartsJointChips.parentElement;
+  if (jointToolbar instanceof HTMLElement) {
+    jointToolbar.dataset.compactJoints = "false";
+  }
+}
+
+function getTrajectoryChartsSegment(): { jointNames: string[]; tcpFrame: string; startedAt: number; samples: MotionSample[] } | null {
+  return activeMotionSegment ?? latestMotionSegment;
+}
+
+function trackTrajectoryChartsMotion(message: unknown): void {
+  const payload = parseJointStatePayload(message);
+  if (!payload) {
+    return;
+  }
+
+  const now = performance.now();
+  const currentPositions = new Map<string, number>();
+  let moved = false;
+  let compared = 0;
+  for (let index = 0; index < payload.names.length; index += 1) {
+    const name = payload.names[index];
+    const position = payload.positions[index];
+    currentPositions.set(name, position);
+    const previous = motionLastPositions?.get(name);
+    if (previous === undefined) {
+      continue;
+    }
+    compared += 1;
+    if (Math.abs(position - previous) >= TRAJ_MOTION_THRESHOLD) {
+      moved = true;
+    }
+  }
+
+  if (!activeMotionSegment) {
+    if (moved && compared > 0) {
+      activeMotionSegment = createActiveMotionSegment(payload, now);
+      appendMotionSample(activeMotionSegment, payload, now, true);
+      ensureTrajectoryChartsVisibleJoints(activeMotionSegment);
+      scheduleTrajectoryChartsRender();
+    }
+    motionLastPositions = currentPositions;
+    return;
+  }
+
+  if (moved) {
+    activeMotionSegment.lastMovementAt = now;
+  }
+
+  if (moved || activeMotionSegment.samples.length === 0 || now - activeMotionSegment.lastSampleAt >= TRAJ_SAMPLE_INTERVAL_MS) {
+    appendMotionSample(activeMotionSegment, payload, now, false);
+  }
+
+  if (!moved && now - activeMotionSegment.lastMovementAt >= TRAJ_IDLE_STOP_MS) {
+    if (activeMotionSegment.samples.length === 0 || now - activeMotionSegment.lastSampleAt > 1) {
+      appendMotionSample(activeMotionSegment, payload, now, true);
+    }
+    latestMotionSegment = finalizeMotionSegment(activeMotionSegment, now);
+    activeMotionSegment = null;
+    ensureTrajectoryChartsVisibleJoints(latestMotionSegment);
+  }
+
+  motionLastPositions = currentPositions;
+  scheduleTrajectoryChartsRender();
+}
+
+function trajectoryChartTheme(): TrajectoryChartTheme {
+  const styles = getComputedStyle(document.documentElement);
+  return {
+    background: styles.getPropertyValue("--surface").trim() || "#ffffff",
+    border: styles.getPropertyValue("--modal-header-border").trim() || "#d7dfe8",
+    grid: styles.getPropertyValue("--border-soft").trim() || "#dfe5ec",
+    text: styles.getPropertyValue("--text").trim() || "#1f2630",
+    muted: styles.getPropertyValue("--muted").trim() || "#687385",
+    accent: styles.getPropertyValue("--accent").trim() || "#4e84c4"
+  };
+}
+
+function trajectoryChartColor(index: number): string {
+  const colors = ["#3f7de0", "#e05f3f", "#29a383", "#8a63d2", "#b8822b", "#d14c8f", "#2d8aa6", "#7b8c30"];
+  return colors[index % colors.length];
+}
+
+function buildJointChartSeries(
+  segment: { jointNames: string[]; samples: MotionSample[] },
+  readValue: (sample: MotionSample, jointIndex: number) => number,
+  convertValue: (value: number) => number
+): TrajectoryChartSeries[] {
+  return segment.jointNames.map((jointName, jointIndex) => ({
+    label: jointName,
+    color: trajectoryChartColor(jointIndex),
+    visible: trajectoryChartsVisibleJoints.has(jointName),
+    values: segment.samples.map((sample) => {
+      const value = readValue(sample, jointIndex);
+      return Number.isFinite(value) ? convertValue(value) : Number.NaN;
+    })
+  }));
+}
+
+function buildAccelerationValues(samples: MotionSample[], jointIndex: number): number[] {
+  const directValues = samples.map((sample) => sample.accelerations?.[jointIndex] ?? Number.NaN);
+  if (directValues.some((value) => Number.isFinite(value))) {
+    return directValues;
+  }
+
+  const result = new Array<number>(samples.length).fill(Number.NaN);
+  let previousVelocity = Number.NaN;
+  let previousTime = 0;
+  for (let index = 0; index < samples.length; index += 1) {
+    const value = samples[index].velocities?.[jointIndex] ?? Number.NaN;
+    if (!Number.isFinite(value)) {
+      continue;
+    }
+    if (Number.isFinite(previousVelocity)) {
+      const deltaSeconds = (samples[index].t - previousTime) / 1000;
+      if (deltaSeconds > 0) {
+        result[index] = (value - previousVelocity) / deltaSeconds;
+      }
+    }
+    previousVelocity = value;
+    previousTime = samples[index].t;
+  }
+  return result;
+}
+
+function buildAccelerationSeries(segment: { jointNames: string[]; samples: MotionSample[] }): TrajectoryChartSeries[] {
+  return segment.jointNames.map((jointName, jointIndex) => ({
+    label: jointName,
+    color: trajectoryChartColor(jointIndex),
+    visible: trajectoryChartsVisibleJoints.has(jointName),
+    values: buildAccelerationValues(segment.samples, jointIndex).map((value) => Number.isFinite(value) ? convertAngleFromRad(value, trajectoryChartsAccelerationUnit) : Number.NaN)
+  }));
+}
+
+function buildTcpSeries(segment: { samples: MotionSample[] }): TrajectoryChartSeries[] {
+  const axisColors = ["#d85b52", "#2f9d72", "#2d7fe3"];
+  const axisNames = ["X", "Y", "Z"] as const;
+  return axisNames.map((axis, axisIndex) => ({
+    label: axis,
+    color: axisColors[axisIndex],
+    values: segment.samples.map((sample) => {
+      if (!sample.tcpPosition) {
+        return Number.NaN;
+      }
+      if (axis === "X") {
+        return convertLengthFromMeter(sample.tcpPosition.x, trajectoryChartsTcpUnit);
+      }
+      if (axis === "Y") {
+        return convertLengthFromMeter(sample.tcpPosition.y, trajectoryChartsTcpUnit);
+      }
+      return convertLengthFromMeter(sample.tcpPosition.z, trajectoryChartsTcpUnit);
+    })
+  }));
+}
+
+function setTrajectoryChartUnitToggleState(primaryButton: HTMLButtonElement, secondaryButton: HTMLButtonElement, primaryActive: boolean): void {
+  const toggle = primaryButton.parentElement;
+  if (toggle instanceof HTMLElement) {
+    toggle.dataset.activeIndex = primaryActive ? "0" : "1";
+  }
+  primaryButton.setAttribute("aria-pressed", primaryActive ? "true" : "false");
+  secondaryButton.setAttribute("aria-pressed", primaryActive ? "false" : "true");
+}
+
+function updateTrajectoryChartsUnitButtons(): void {
+  setTrajectoryChartUnitToggleState(elements.trajectoryChartsPositionDegBtn, elements.trajectoryChartsPositionRadBtn, trajectoryChartsPositionUnit === "deg");
+  setTrajectoryChartUnitToggleState(elements.trajectoryChartsTcpMmBtn, elements.trajectoryChartsTcpMBtn, trajectoryChartsTcpUnit === "mm");
+  setTrajectoryChartUnitToggleState(elements.trajectoryChartsVelocityDegBtn, elements.trajectoryChartsVelocityRadBtn, trajectoryChartsVelocityUnit === "deg");
+  setTrajectoryChartUnitToggleState(elements.trajectoryChartsAccelerationDegBtn, elements.trajectoryChartsAccelerationRadBtn, trajectoryChartsAccelerationUnit === "deg");
+}
+
+function updateRightPanelUnitButtons(): void {
+  setTrajectoryChartUnitToggleState(elements.jointAngleDegBtn, elements.jointAngleRadBtn, jointAngleUnit === "deg");
+  setTrajectoryChartUnitToggleState(elements.cartesianLengthMmBtn, elements.cartesianLengthMBtn, cartesianLengthUnit === "mm");
+  setTrajectoryChartUnitToggleState(elements.cartesianAngleDegBtn, elements.cartesianAngleRadBtn, cartesianAngleUnit === "deg");
+}
+
+function updateTrajectoryChartsJointChipState(button: HTMLButtonElement, jointName: string): void {
+  const active = trajectoryChartsVisibleJoints.has(jointName);
+  button.classList.toggle("is-inactive", !active);
+  button.setAttribute("aria-pressed", active ? "true" : "false");
+}
+
+function renderTrajectoryChartsJointChips(segment: { jointNames: string[] } | null): void {
+  const jointToolbar = elements.trajectoryChartsJointChips.parentElement;
+  if (!segment || segment.jointNames.length === 0) {
+    clearElement(elements.trajectoryChartsJointChips);
+    elements.trajectoryChartsJointChips.removeAttribute("data-signature");
+    if (jointToolbar instanceof HTMLElement) {
+      jointToolbar.dataset.compactJoints = "false";
+    }
+    elements.trajectoryChartsShowAllBtn.disabled = true;
+    elements.trajectoryChartsResetBtn.disabled = true;
+    return;
+  }
+
+  if (jointToolbar instanceof HTMLElement) {
+    jointToolbar.dataset.compactJoints = segment.jointNames.length <= 6 ? "true" : "false";
+  }
+
+  const signature = trajectoryChartsSegmentSignature(segment);
+  const needsBuild = elements.trajectoryChartsJointChips.getAttribute("data-signature") !== signature;
+  if (needsBuild) {
+    clearElement(elements.trajectoryChartsJointChips);
+    elements.trajectoryChartsJointChips.setAttribute("data-signature", signature);
+    for (let index = 0; index < segment.jointNames.length; index += 1) {
+      const jointName = segment.jointNames[index];
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "trajectory-charts-joint-chip";
+      button.dataset.jointName = jointName;
+      const swatch = document.createElement("span");
+      swatch.className = "trajectory-charts-joint-chip-swatch";
+      swatch.style.backgroundColor = trajectoryChartColor(index);
+      const label = document.createElement("span");
+      label.textContent = jointName;
+      button.appendChild(swatch);
+      button.appendChild(label);
+      button.addEventListener("click", () => {
+        if (trajectoryChartsVisibleJoints.has(jointName)) {
+          trajectoryChartsVisibleJoints.delete(jointName);
+        } else {
+          trajectoryChartsVisibleJoints.add(jointName);
+        }
+        if (trajectoryChartsVisibleJoints.size === 0) {
+          trajectoryChartsVisibleJoints = defaultTrajectoryChartsVisibleJoints(segment.jointNames);
+        }
+        renderTrajectoryChartsJointChips(getTrajectoryChartsSegment());
+        scheduleTrajectoryChartsRender();
+      });
+      elements.trajectoryChartsJointChips.appendChild(button);
+    }
+  }
+
+  for (const child of Array.from(elements.trajectoryChartsJointChips.children)) {
+    if (!(child instanceof HTMLButtonElement)) {
+      continue;
+    }
+    const jointName = child.dataset.jointName || "";
+    updateTrajectoryChartsJointChipState(child, jointName);
+  }
+
+  elements.trajectoryChartsShowAllBtn.disabled = false;
+  elements.trajectoryChartsResetBtn.disabled = false;
+}
+
+function scheduleTrajectoryChartsRender(): void {
+  if (!trajectoryChartsOpen) {
+    return;
+  }
+  if (pendingTrajectoryChartsRender) {
+    return;
+  }
+  pendingTrajectoryChartsRender = true;
+  window.requestAnimationFrame(() => {
+    pendingTrajectoryChartsRender = false;
+    renderTrajectoryChartsModal();
+  });
+}
+
+function setTrajectoryChartsOpen(open: boolean): void {
+  if (open && rosGraphOpen) {
+    setRosGraphOpen(false);
+  }
+  trajectoryChartsOpen = open;
+  elements.trajectoryChartsModal.classList.toggle("active", trajectoryChartsOpen);
+  elements.trajectoryChartsModal.setAttribute("aria-hidden", trajectoryChartsOpen ? "false" : "true");
+  updateTrajectoryChartsToggleUi();
+  if (!trajectoryChartsOpen) {
+    return;
+  }
+  renderTrajectoryChartsModal();
+  window.requestAnimationFrame(() => {
+    if (trajectoryChartsOpen) {
+      renderTrajectoryChartsModal();
+    }
+  });
+}
+
+function renderTrajectoryChartsModal(): void {
+  const closeLabel = t(currentLanguage, "button.close");
+  elements.trajectoryChartsCloseBtn.title = closeLabel;
+  elements.trajectoryChartsCloseBtn.setAttribute("aria-label", closeLabel);
+  updateTrajectoryChartsUnitButtons();
+
+  const segment = getTrajectoryChartsSegment();
+  ensureTrajectoryChartsVisibleJoints(segment);
+  renderTrajectoryChartsJointChips(segment);
+
+  let statusText = t(currentLanguage, "state.trajectoryChartsEmpty");
+  let metaText = t(currentLanguage, "state.trajectoryChartsEmpty");
+  if (!rosClient.isConnected() && !segment) {
+    statusText = t(currentLanguage, "state.notConnected");
+    metaText = t(currentLanguage, "state.trajectoryChartsDisconnected");
+  } else if (activeMotionSegment) {
+    statusText = t(currentLanguage, "state.trajectoryChartsCapturing");
+    metaText = t(currentLanguage, "state.trajectoryChartsMetaCapturing");
+  } else if (latestMotionSegment) {
+    statusText = t(currentLanguage, "state.trajectoryChartsLatest");
+    metaText = t(currentLanguage, "state.trajectoryChartsMetaLatest");
+  }
+
+  const sampleCount = segment ? segment.samples.length : 0;
+  const durationMs = !segment || sampleCount === 0
+    ? 0
+    : activeMotionSegment
+      ? activeMotionSegment.samples[activeMotionSegment.samples.length - 1]?.t ?? 0
+      : latestMotionSegment
+        ? latestMotionSegment.endedAt - latestMotionSegment.startedAt
+        : segment.samples[sampleCount - 1]?.t ?? 0;
+
+  elements.trajectoryChartsMeta.textContent = metaText;
+  elements.trajectoryChartsStatusValue.textContent = statusText;
+  elements.trajectoryChartsDurationValue.textContent = sampleCount > 0 ? formatTrajectoryTime(durationMs) : "--";
+  elements.trajectoryChartsSamplesValue.textContent = String(sampleCount);
+  elements.trajectoryChartsTcpFrameValue.textContent = segment && segment.tcpFrame ? segment.tcpFrame : t(currentLanguage, "state.trajectoryChartsNoTcpFrame");
+
+  if (!trajectoryChartsOpen) {
+    return;
+  }
+
+  const theme = trajectoryChartTheme();
+  const times = segment ? segment.samples.map((sample) => sample.t) : [];
+  const emptyLabel = !rosClient.isConnected() && !segment
+    ? t(currentLanguage, "state.trajectoryChartsDisconnected")
+    : t(currentLanguage, "state.trajectoryChartsEmpty");
+  const playheadTime = activeMotionSegment && activeMotionSegment.samples.length > 0
+    ? activeMotionSegment.samples[activeMotionSegment.samples.length - 1].t
+    : undefined;
+
+  const positionSeries = segment
+    ? buildJointChartSeries(segment, (sample, jointIndex) => sample.positions[jointIndex] ?? Number.NaN, (value) => convertAngleFromRad(value, trajectoryChartsPositionUnit))
+    : [];
+  const tcpSeries = segment ? buildTcpSeries(segment) : [];
+  const velocitySeries = segment
+    ? buildJointChartSeries(segment, (sample, jointIndex) => sample.velocities?.[jointIndex] ?? Number.NaN, (value) => convertAngleFromRad(value, trajectoryChartsVelocityUnit))
+    : [];
+  const accelerationSeries = segment ? buildAccelerationSeries(segment) : [];
+  const effortSeries = segment
+    ? buildJointChartSeries(segment, (sample, jointIndex) => sample.efforts?.[jointIndex] ?? Number.NaN, (value) => value)
+    : [];
+
+  renderTrajectoryLineChart({
+    canvas: elements.trajectoryChartsPositionCanvas,
+    times,
+    series: positionSeries,
+    unitLabel: angleUnitLabel(trajectoryChartsPositionUnit),
+    emptyLabel,
+    theme,
+    playheadTime
+  });
+  renderTrajectoryLineChart({
+    canvas: elements.trajectoryChartsTcpCanvas,
+    times,
+    series: tcpSeries,
+    unitLabel: lengthUnitLabel(trajectoryChartsTcpUnit),
+    emptyLabel,
+    theme,
+    playheadTime
+  });
+  renderTrajectoryLineChart({
+    canvas: elements.trajectoryChartsVelocityCanvas,
+    times,
+    series: velocitySeries,
+    unitLabel: rateUnitLabel(trajectoryChartsVelocityUnit),
+    emptyLabel,
+    theme,
+    playheadTime
+  });
+  renderTrajectoryLineChart({
+    canvas: elements.trajectoryChartsAccelerationCanvas,
+    times,
+    series: accelerationSeries,
+    unitLabel: accelerationUnitLabel(trajectoryChartsAccelerationUnit),
+    emptyLabel,
+    theme,
+    playheadTime
+  });
+  renderTrajectoryLineChart({
+    canvas: elements.trajectoryChartsTorqueCanvas,
+    times,
+    series: effortSeries,
+    unitLabel: "effort",
+    emptyLabel,
+    theme,
+    playheadTime
+  });
 }
 
 function renderConfigToUi(): void {
@@ -2845,6 +3743,7 @@ async function loadRobotIntoScene(): Promise<void> {
 
 async function connect(): Promise<void> {
   clearAllTrajectoryDisplays();
+  clearTrajectoryChartsState();
   syncConfigFromUi();
   log(`connecting ROS bridge: ${config.rosbridgeUrl}`);
 
@@ -2878,6 +3777,9 @@ async function connect(): Promise<void> {
   if (rosGraphOpen) {
     void refreshRosGraphSnapshot();
   }
+  if (trajectoryChartsOpen) {
+    renderTrajectoryChartsModal();
+  }
 }
 
 function disconnect(): void {
@@ -2890,7 +3792,9 @@ function disconnect(): void {
   clearAllTrajectoryDisplays();
   clearRightPanelState();
   clearRosGraphState();
+  clearTrajectoryChartsState();
   renderRosGraphModal();
+  renderTrajectoryChartsModal();
   log("disconnected");
 }
 
@@ -3461,6 +4365,9 @@ function centerRosGraphOnEntity(entityId: string): void {
 }
 
 function setRosGraphOpen(open: boolean): void {
+  if (open && trajectoryChartsOpen) {
+    setTrajectoryChartsOpen(false);
+  }
   rosGraphOpen = open;
   elements.rosGraphModal.classList.toggle("active", rosGraphOpen);
   elements.rosGraphModal.setAttribute("aria-hidden", rosGraphOpen ? "false" : "true");
@@ -4047,23 +4954,23 @@ sceneManager.setTheme(currentTheme);
 sceneManager.setPlannedTrajectoryVisible(plannedTrajectoryVisible);
 elements.plannedTrajectoryToggleBtn.innerHTML = TRAJ_ICON_PLAN_PATH;
 elements.rosGraphToggleBtn.innerHTML = ROS_GRAPH_ICON;
+elements.trajectoryChartsToggleBtn.innerHTML = TRAJECTORY_CHARTS_ICON;
 elements.rosGraphRefreshBtn.innerHTML = ROS_GRAPH_REFRESH_ICON;
 elements.rosGraphFitBtn.innerHTML = ROS_GRAPH_FIT_ICON;
 elements.rosGraphModeBtn.innerHTML = ROS_GRAPH_MODE_ICON;
 elements.rosGraphCloseBtn.innerHTML = ROS_GRAPH_CLOSE_ICON;
+elements.trajectoryChartsCloseBtn.innerHTML = ROS_GRAPH_CLOSE_ICON;
 elements.resetViewBtn.innerHTML = VIEW_ICON_RESET;
 updatePlannedTrajectoryToggleUi();
 updateResetViewButtonUi();
 renderConfigToUi();
 updatePointCloudOptions([], config.defaultPointCloudTopic);
 enhanceSelect(elements.pointCloudTopic);
-enhanceSelect(elements.jointAngleUnit);
 enhanceSelect(elements.cartesianFrame);
-enhanceSelect(elements.cartesianLengthUnit);
-enhanceSelect(elements.cartesianAngleUnit);
 jointAngleUnit = elements.jointAngleUnit.value as AngleUnit;
 cartesianLengthUnit = elements.cartesianLengthUnit.value as LengthUnit;
 cartesianAngleUnit = elements.cartesianAngleUnit.value as AngleUnit;
+updateRightPanelUnitButtons();
 setSidebarCollapsed(sidebarCollapsed);
 setRightSidebarCollapsed(rightSidebarCollapsed);
 setRightPanelTab("robot");
@@ -4078,6 +4985,7 @@ rosClient.onStateChange((state, detail) => {
 
   if (state === "disconnected" || state === "error") {
     clearRosGraphState();
+    clearTrajectoryChartsState();
   }
 
   if (state === "connected" && rosGraphOpen && !rosGraphSnapshot && !rosGraphBusy) {
@@ -4085,6 +4993,7 @@ rosClient.onStateChange((state, detail) => {
   }
 
   renderRosGraphModal();
+  renderTrajectoryChartsModal();
 });
 
 elements.languageToggleBtn.addEventListener("click", () => {
@@ -4099,6 +5008,7 @@ elements.themeToggleBtn.addEventListener("click", () => {
   applyTheme(currentTheme);
   sceneManager.setTheme(currentTheme);
   updateThemeToggleUi();
+  scheduleTrajectoryChartsRender();
 });
 
 elements.connectBtn.addEventListener("click", async () => {
@@ -4149,6 +5059,10 @@ elements.plannedTrajectoryToggleBtn.addEventListener("click", () => {
 
 elements.rosGraphToggleBtn.addEventListener("click", () => {
   setRosGraphOpen(!rosGraphOpen);
+});
+
+elements.trajectoryChartsToggleBtn.addEventListener("click", () => {
+  setTrajectoryChartsOpen(!trajectoryChartsOpen);
 });
 
 elements.resetViewBtn.addEventListener("click", () => {
@@ -4208,8 +5122,16 @@ elements.rosGraphCloseBtn.addEventListener("click", () => {
   setRosGraphOpen(false);
 });
 
+elements.trajectoryChartsCloseBtn.addEventListener("click", () => {
+  setTrajectoryChartsOpen(false);
+});
+
 elements.rosGraphModalBackdrop.addEventListener("click", () => {
   setRosGraphOpen(false);
+});
+
+elements.trajectoryChartsModalBackdrop.addEventListener("click", () => {
+  setTrajectoryChartsOpen(false);
 });
 
 elements.rosGraphRefreshBtn.addEventListener("click", () => {
@@ -4232,6 +5154,66 @@ elements.rosGraphSearch.addEventListener("input", () => {
       fitRosGraphToView();
     }
   });
+});
+
+elements.trajectoryChartsPositionDegBtn.addEventListener("click", () => {
+  trajectoryChartsPositionUnit = "deg";
+  renderTrajectoryChartsModal();
+});
+
+elements.trajectoryChartsPositionRadBtn.addEventListener("click", () => {
+  trajectoryChartsPositionUnit = "rad";
+  renderTrajectoryChartsModal();
+});
+
+elements.trajectoryChartsTcpMmBtn.addEventListener("click", () => {
+  trajectoryChartsTcpUnit = "mm";
+  renderTrajectoryChartsModal();
+});
+
+elements.trajectoryChartsTcpMBtn.addEventListener("click", () => {
+  trajectoryChartsTcpUnit = "m";
+  renderTrajectoryChartsModal();
+});
+
+elements.trajectoryChartsVelocityDegBtn.addEventListener("click", () => {
+  trajectoryChartsVelocityUnit = "deg";
+  renderTrajectoryChartsModal();
+});
+
+elements.trajectoryChartsVelocityRadBtn.addEventListener("click", () => {
+  trajectoryChartsVelocityUnit = "rad";
+  renderTrajectoryChartsModal();
+});
+
+elements.trajectoryChartsAccelerationDegBtn.addEventListener("click", () => {
+  trajectoryChartsAccelerationUnit = "deg";
+  renderTrajectoryChartsModal();
+});
+
+elements.trajectoryChartsAccelerationRadBtn.addEventListener("click", () => {
+  trajectoryChartsAccelerationUnit = "rad";
+  renderTrajectoryChartsModal();
+});
+
+elements.trajectoryChartsShowAllBtn.addEventListener("click", () => {
+  const segment = getTrajectoryChartsSegment();
+  if (!segment) {
+    return;
+  }
+  trajectoryChartsVisibleJoints = new Set(segment.jointNames);
+  renderTrajectoryChartsJointChips(segment);
+  scheduleTrajectoryChartsRender();
+});
+
+elements.trajectoryChartsResetBtn.addEventListener("click", () => {
+  const segment = getTrajectoryChartsSegment();
+  if (!segment) {
+    return;
+  }
+  trajectoryChartsVisibleJoints = defaultTrajectoryChartsVisibleJoints(segment.jointNames);
+  renderTrajectoryChartsJointChips(segment);
+  scheduleTrajectoryChartsRender();
 });
 
 elements.rosGraphSvg.addEventListener("click", (event) => {
@@ -4321,21 +5303,73 @@ window.addEventListener("keydown", (event) => {
     if (rosGraphOpen) {
       setRosGraphOpen(false);
     }
+    if (trajectoryChartsOpen) {
+      setTrajectoryChartsOpen(false);
+    }
   }
+});
+
+window.addEventListener("resize", () => {
+  scheduleTrajectoryChartsRender();
 });
 
 elements.jointAngleUnit.addEventListener("change", () => {
   jointAngleUnit = elements.jointAngleUnit.value as AngleUnit;
+  updateRightPanelUnitButtons();
+  scheduleRightPanelUpdate();
+});
+
+elements.jointAngleDegBtn.addEventListener("click", () => {
+  jointAngleUnit = "deg";
+  elements.jointAngleUnit.value = jointAngleUnit;
+  updateRightPanelUnitButtons();
+  scheduleRightPanelUpdate();
+});
+
+elements.jointAngleRadBtn.addEventListener("click", () => {
+  jointAngleUnit = "rad";
+  elements.jointAngleUnit.value = jointAngleUnit;
+  updateRightPanelUnitButtons();
   scheduleRightPanelUpdate();
 });
 
 elements.cartesianLengthUnit.addEventListener("change", () => {
   cartesianLengthUnit = elements.cartesianLengthUnit.value as LengthUnit;
+  updateRightPanelUnitButtons();
+  scheduleRightPanelUpdate();
+});
+
+elements.cartesianLengthMmBtn.addEventListener("click", () => {
+  cartesianLengthUnit = "mm";
+  elements.cartesianLengthUnit.value = cartesianLengthUnit;
+  updateRightPanelUnitButtons();
+  scheduleRightPanelUpdate();
+});
+
+elements.cartesianLengthMBtn.addEventListener("click", () => {
+  cartesianLengthUnit = "m";
+  elements.cartesianLengthUnit.value = cartesianLengthUnit;
+  updateRightPanelUnitButtons();
   scheduleRightPanelUpdate();
 });
 
 elements.cartesianAngleUnit.addEventListener("change", () => {
   cartesianAngleUnit = elements.cartesianAngleUnit.value as AngleUnit;
+  updateRightPanelUnitButtons();
+  scheduleRightPanelUpdate();
+});
+
+elements.cartesianAngleDegBtn.addEventListener("click", () => {
+  cartesianAngleUnit = "deg";
+  elements.cartesianAngleUnit.value = cartesianAngleUnit;
+  updateRightPanelUnitButtons();
+  scheduleRightPanelUpdate();
+});
+
+elements.cartesianAngleRadBtn.addEventListener("click", () => {
+  cartesianAngleUnit = "rad";
+  elements.cartesianAngleUnit.value = cartesianAngleUnit;
+  updateRightPanelUnitButtons();
   scheduleRightPanelUpdate();
 });
 

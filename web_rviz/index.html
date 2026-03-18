@@ -53,6 +53,7 @@
           <button id="sidebarToggleBtn" class="viewport-toggle-btn" type="button" aria-controls="leftSidebar" aria-expanded="true" aria-label="Hide Sidebar" title="Hide Sidebar"></button>
           <button id="plannedTrajectoryToggleBtn" class="viewport-toggle-btn" type="button" aria-label="Hide planned trajectory" title="Hide planned trajectory"></button>
           <button id="rosGraphToggleBtn" class="viewport-toggle-btn" type="button" aria-label="Show ROS Graph" title="Show ROS Graph"></button>
+          <button id="trajectoryChartsToggleBtn" class="viewport-toggle-btn" type="button" aria-label="Show motion curves" title="Show motion curves"></button>
         </div>
         <div class="viewport-top-right-tools">
           <button id="resetViewBtn" class="viewport-toggle-btn" type="button" aria-label="Reset view" title="Reset view"></button>
@@ -81,29 +82,50 @@
         <div id="robotStateView" class="panel-view active">
           <h2 data-i18n="panel.robotState">Robot State</h2>
 
-          <section class="panel-section">
-            <h3 data-i18n="section.jointAngles">Joint Angles</h3>
-            <select id="jointAngleUnit">
-              <option value="deg" selected>deg</option>
-              <option value="rad">rad</option>
-            </select>
+          <section class="panel-section panel-section-compact">
+            <div class="panel-section-header">
+              <h3 data-i18n="section.jointAngles">Joint Angles</h3>
+              <div class="panel-section-title-tools">
+                <select id="jointAngleUnit" class="panel-unit-native-select" aria-hidden="true" tabindex="-1">
+                  <option value="deg" selected>deg</option>
+                  <option value="rad">rad</option>
+                </select>
+                <div class="trajectory-chart-unit-toggle panel-unit-toggle" data-active-index="0">
+                  <span class="trajectory-chart-unit-thumb" aria-hidden="true"></span>
+                  <button id="jointAngleDegBtn" class="trajectory-chart-unit-btn panel-unit-btn" type="button" aria-pressed="true">deg</button>
+                  <button id="jointAngleRadBtn" class="trajectory-chart-unit-btn panel-unit-btn" type="button" aria-pressed="false">rad</button>
+                </div>
+              </div>
+            </div>
             <div id="jointValues" class="data-list"></div>
           </section>
 
-          <section class="panel-section">
-            <h3 data-i18n="section.cartesian">Cartesian Position</h3>
+          <section class="panel-section panel-section-compact">
+            <div class="panel-section-header">
+              <h3 data-i18n="section.cartesian">Cartesian Position</h3>
+              <div class="panel-section-title-tools">
+                <select id="cartesianLengthUnit" class="panel-unit-native-select" aria-hidden="true" tabindex="-1">
+                  <option value="mm" selected>mm</option>
+                  <option value="m">m</option>
+                </select>
+                <select id="cartesianAngleUnit" class="panel-unit-native-select" aria-hidden="true" tabindex="-1">
+                  <option value="deg" selected>deg</option>
+                  <option value="rad">rad</option>
+                </select>
+                <div class="trajectory-chart-unit-toggle panel-unit-toggle" data-active-index="0">
+                  <span class="trajectory-chart-unit-thumb" aria-hidden="true"></span>
+                  <button id="cartesianLengthMmBtn" class="trajectory-chart-unit-btn panel-unit-btn" type="button" aria-pressed="true">mm</button>
+                  <button id="cartesianLengthMBtn" class="trajectory-chart-unit-btn panel-unit-btn" type="button" aria-pressed="false">m</button>
+                </div>
+                <div class="trajectory-chart-unit-toggle panel-unit-toggle" data-active-index="0">
+                  <span class="trajectory-chart-unit-thumb" aria-hidden="true"></span>
+                  <button id="cartesianAngleDegBtn" class="trajectory-chart-unit-btn panel-unit-btn" type="button" aria-pressed="true">deg</button>
+                  <button id="cartesianAngleRadBtn" class="trajectory-chart-unit-btn panel-unit-btn" type="button" aria-pressed="false">rad</button>
+                </div>
+              </div>
+            </div>
             <label for="cartesianFrame" data-i18n="label.frame">TCP link</label>
             <select id="cartesianFrame"></select>
-            <div class="row row-compact">
-              <select id="cartesianLengthUnit">
-                <option value="mm" selected>mm</option>
-                <option value="m">m</option>
-              </select>
-              <select id="cartesianAngleUnit">
-                <option value="deg" selected>deg</option>
-                <option value="rad">rad</option>
-              </select>
-            </div>
             <div id="cartesianValues" class="data-list"></div>
           </section>
 
@@ -187,6 +209,116 @@
             </div>
           </section>
           <aside id="rosGraphDetail" class="ros-graph-detail-panel"></aside>
+        </div>
+      </div>
+    </div>
+
+    <div id="trajectoryChartsModal" class="detail-modal trajectory-charts-modal" aria-hidden="true">
+      <div id="trajectoryChartsModalBackdrop" class="detail-modal-backdrop"></div>
+      <div class="detail-modal-dialog trajectory-charts-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="trajectoryChartsModalTitle">
+        <div class="detail-modal-header trajectory-charts-modal-header">
+          <div class="trajectory-charts-header-copy">
+            <h3 id="trajectoryChartsModalTitle" data-i18n="modal.trajectoryChartsTitle">Motion Curves</h3>
+            <div id="trajectoryChartsMeta" class="trajectory-charts-meta">Waiting for motion data</div>
+          </div>
+          <button id="trajectoryChartsCloseBtn" class="ros-graph-tool-btn" type="button" aria-label="Close"></button>
+        </div>
+        <div class="trajectory-charts-modal-body">
+          <section class="trajectory-charts-summary">
+            <div class="trajectory-charts-stat">
+              <span data-i18n="label.trajectoryChartsStatus">Status</span>
+              <strong id="trajectoryChartsStatusValue">--</strong>
+            </div>
+            <div class="trajectory-charts-stat">
+              <span data-i18n="label.trajectoryChartsDuration">Duration</span>
+              <strong id="trajectoryChartsDurationValue">--</strong>
+            </div>
+            <div class="trajectory-charts-stat">
+              <span data-i18n="label.trajectoryChartsSamples">Samples</span>
+              <strong id="trajectoryChartsSamplesValue">0</strong>
+            </div>
+            <div class="trajectory-charts-stat trajectory-charts-stat-wide">
+              <span data-i18n="label.trajectoryChartsTcpFrame">TCP Frame</span>
+              <strong id="trajectoryChartsTcpFrameValue">--</strong>
+            </div>
+          </section>
+          <section class="trajectory-charts-joint-toolbar">
+            <div id="trajectoryChartsJointChips" class="trajectory-charts-joint-chips"></div>
+            <div class="trajectory-charts-joint-actions">
+              <button id="trajectoryChartsShowAllBtn" type="button" data-i18n="button.showAllShort">All</button>
+              <button id="trajectoryChartsResetBtn" type="button" data-i18n="button.resetSelection">Reset</button>
+            </div>
+          </section>
+          <section class="trajectory-charts-grid">
+            <article class="trajectory-chart-card">
+              <div class="trajectory-chart-card-header">
+                <h4 data-i18n="section.trajectoryJointPosition">Joint Trajectory</h4>
+                <div class="trajectory-chart-unit-group">
+                  <div class="trajectory-chart-unit-toggle" data-active-index="0">
+                    <span class="trajectory-chart-unit-thumb" aria-hidden="true"></span>
+                    <button id="trajectoryChartsPositionDegBtn" class="trajectory-chart-unit-btn" type="button" aria-pressed="true">deg</button>
+                    <button id="trajectoryChartsPositionRadBtn" class="trajectory-chart-unit-btn" type="button" aria-pressed="false">rad</button>
+                  </div>
+                </div>
+              </div>
+              <div class="trajectory-chart-canvas-shell">
+                <canvas id="trajectoryChartsPositionCanvas"></canvas>
+              </div>
+            </article>
+            <article class="trajectory-chart-card">
+              <div class="trajectory-chart-card-header">
+                <h4 data-i18n="section.trajectoryTcpPosition">TCP Trajectory</h4>
+                <div class="trajectory-chart-unit-group">
+                  <div class="trajectory-chart-unit-toggle" data-active-index="0">
+                    <span class="trajectory-chart-unit-thumb" aria-hidden="true"></span>
+                    <button id="trajectoryChartsTcpMmBtn" class="trajectory-chart-unit-btn" type="button" aria-pressed="true">mm</button>
+                    <button id="trajectoryChartsTcpMBtn" class="trajectory-chart-unit-btn" type="button" aria-pressed="false">m</button>
+                  </div>
+                </div>
+              </div>
+              <div class="trajectory-chart-canvas-shell">
+                <canvas id="trajectoryChartsTcpCanvas"></canvas>
+              </div>
+            </article>
+            <article class="trajectory-chart-card">
+              <div class="trajectory-chart-card-header">
+                <h4 data-i18n="section.trajectoryJointVelocity">Joint Velocity</h4>
+                <div class="trajectory-chart-unit-group">
+                  <div class="trajectory-chart-unit-toggle" data-active-index="0">
+                    <span class="trajectory-chart-unit-thumb" aria-hidden="true"></span>
+                    <button id="trajectoryChartsVelocityDegBtn" class="trajectory-chart-unit-btn" type="button" aria-pressed="true">deg/s</button>
+                    <button id="trajectoryChartsVelocityRadBtn" class="trajectory-chart-unit-btn" type="button" aria-pressed="false">rad/s</button>
+                  </div>
+                </div>
+              </div>
+              <div class="trajectory-chart-canvas-shell">
+                <canvas id="trajectoryChartsVelocityCanvas"></canvas>
+              </div>
+            </article>
+            <article class="trajectory-chart-card">
+              <div class="trajectory-chart-card-header">
+                <h4 data-i18n="section.trajectoryJointAcceleration">Joint Acceleration</h4>
+                <div class="trajectory-chart-unit-group">
+                  <div class="trajectory-chart-unit-toggle" data-active-index="0">
+                    <span class="trajectory-chart-unit-thumb" aria-hidden="true"></span>
+                    <button id="trajectoryChartsAccelerationDegBtn" class="trajectory-chart-unit-btn" type="button" aria-pressed="true">deg/s^2</button>
+                    <button id="trajectoryChartsAccelerationRadBtn" class="trajectory-chart-unit-btn" type="button" aria-pressed="false">rad/s^2</button>
+                  </div>
+                </div>
+              </div>
+              <div class="trajectory-chart-canvas-shell">
+                <canvas id="trajectoryChartsAccelerationCanvas"></canvas>
+              </div>
+            </article>
+            <article class="trajectory-chart-card trajectory-chart-card-wide">
+              <div class="trajectory-chart-card-header">
+                <h4 data-i18n="section.trajectoryJointEffort">Torque / Effort</h4>
+              </div>
+              <div class="trajectory-chart-canvas-shell">
+                <canvas id="trajectoryChartsTorqueCanvas"></canvas>
+              </div>
+            </article>
+          </section>
         </div>
       </div>
     </div>
