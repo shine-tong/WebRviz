@@ -28,6 +28,12 @@ export interface ServiceDetailsResponse {
   response: MessageDetailsResponse;
 }
 
+export interface NodeDetails {
+  publishing: string[];
+  subscribing: string[];
+  services: string[];
+}
+
 type StateListener = (state: ConnectionState, message?: string) => void;
 
 interface TopicsResponse {
@@ -52,6 +58,16 @@ interface GetParamNamesResponse {
 
 interface GetParamResponse {
   value: string;
+}
+
+interface NodesResponse {
+  nodes: string[];
+}
+
+interface NodeDetailsResponse {
+  publishing?: string[];
+  subscribing?: string[];
+  services?: string[];
 }
 
 export class RosClient {
@@ -185,6 +201,30 @@ export class RosClient {
     );
 
     return response.names || [];
+  }
+
+  async listNodes(): Promise<string[]> {
+    const response = await this.callService<Record<string, never>, NodesResponse>(
+      "/rosapi/nodes",
+      "rosapi/Nodes",
+      {}
+    );
+
+    return response.nodes || [];
+  }
+
+  async getNodeDetails(node: string): Promise<NodeDetails> {
+    const response = await this.callService<{ node: string }, NodeDetailsResponse>(
+      "/rosapi/node_details",
+      "rosapi/NodeDetails",
+      { node }
+    );
+
+    return {
+      publishing: Array.isArray(response.publishing) ? response.publishing : [],
+      subscribing: Array.isArray(response.subscribing) ? response.subscribing : [],
+      services: Array.isArray(response.services) ? response.services : []
+    };
   }
 
   async getMessageDetails(type: string): Promise<MessageDetailsResponse> {

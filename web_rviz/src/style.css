@@ -1562,3 +1562,376 @@ body {
     padding: 7px 9px;
   }
 }
+
+
+#rosGraphToggleBtn svg {
+  width: 20px;
+  height: 20px;
+}
+
+#rosGraphToggleBtn svg,
+#rosGraphToggleBtn svg * {
+  fill: currentColor;
+}
+
+.ros-graph-modal-dialog {
+  width: min(1320px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+}
+
+.ros-graph-modal-header {
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.ros-graph-header-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ros-graph-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ros-graph-header-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: nowrap;
+  margin-left: auto;
+}
+
+.ros-graph-action-buttons {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.ros-graph-tool-btn {
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-soft);
+  background: var(--surface);
+  color: var(--muted);
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease, transform 0.12s ease;
+}
+
+.ros-graph-tool-btn:hover:not(:disabled) {
+  background: var(--surface-button-hover);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.ros-graph-tool-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.ros-graph-tool-btn:disabled {
+  opacity: 0.45;
+}
+
+.ros-graph-tool-btn svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.ros-graph-tool-btn svg,
+.ros-graph-tool-btn svg * {
+  fill: none;
+  stroke: currentColor;
+}
+
+#rosGraphSearch {
+  flex: 0 1 320px;
+  min-width: 220px;
+  width: min(320px, 42vw);
+}
+
+.ros-graph-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  overflow: hidden;
+  background: var(--surface-strong);
+}
+
+.ros-graph-canvas-section {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--modal-header-border);
+}
+
+.ros-graph-banner {
+  padding: 10px 14px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface);
+  border-bottom: 1px solid var(--modal-header-border);
+}
+
+.ros-graph-canvas-shell {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  background:
+    radial-gradient(circle at top, rgba(100, 150, 210, 0.1), transparent 42%),
+    linear-gradient(var(--surface-strong), var(--surface));
+}
+
+.ros-graph-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: grab;
+  color: var(--muted);
+  touch-action: none;
+  user-select: none;
+}
+
+.ros-graph-svg.is-panning {
+  cursor: grabbing;
+}
+
+.ros-graph-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.ros-graph-empty[hidden] {
+  display: none;
+}
+
+.ros-graph-edge {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  color: var(--muted);
+  opacity: 0.65;
+  marker-end: url(#rosGraphArrow);
+}
+
+.ros-graph-edge.is-dimmed {
+  opacity: 0.16;
+}
+
+.ros-graph-edge.is-highlighted {
+  color: var(--accent);
+  opacity: 0.95;
+  stroke-width: 1.95;
+}
+
+.ros-graph-entity {
+  cursor: pointer;
+  transition: opacity 0.16s ease;
+}
+
+.ros-graph-entity.is-dimmed {
+  opacity: 0.28;
+}
+
+.ros-graph-entity-shape {
+  fill: var(--surface);
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+  transition: fill 0.16s ease, stroke 0.16s ease, stroke-width 0.16s ease, filter 0.16s ease;
+}
+
+.ros-graph-entity.is-topic .ros-graph-entity-shape {
+  fill: var(--surface-button-hover);
+}
+
+.ros-graph-entity.is-selected .ros-graph-entity-shape {
+  stroke: var(--accent);
+  stroke-width: 2.2;
+  filter: drop-shadow(0 0 10px rgba(92, 156, 255, 0.2));
+}
+
+.ros-graph-entity-label {
+  fill: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  pointer-events: none;
+}
+
+.ros-graph-detail-panel {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: var(--surface);
+}
+
+.ros-graph-detail-empty {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.ros-graph-detail-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--surface-strong);
+}
+
+.ros-graph-detail-kind {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ros-graph-detail-name {
+  font-size: 18px;
+  line-height: 1.3;
+  font-weight: 700;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.ros-graph-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(96px, 112px) minmax(0, 1fr);
+  gap: 8px 12px;
+}
+
+.ros-graph-detail-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ros-graph-detail-value {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.ros-graph-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ros-graph-detail-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ros-graph-detail-section-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.ros-graph-detail-count {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ros-graph-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ros-graph-detail-link,
+.ros-graph-detail-pill {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.ros-graph-detail-link {
+  text-align: left;
+}
+
+.ros-graph-detail-link:hover {
+  border-color: var(--accent);
+}
+
+.ros-graph-detail-pill {
+  cursor: default;
+}
+
+@media (max-width: 1080px) {
+  .ros-graph-modal-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(320px, 1fr) minmax(220px, 36vh);
+  }
+
+  .ros-graph-canvas-section {
+    border-right: none;
+    border-bottom: 1px solid var(--modal-header-border);
+  }
+}
+
+@media (max-width: 760px) {
+  .ros-graph-modal-dialog {
+    width: calc(100vw - 18px);
+    max-height: calc(100vh - 18px);
+  }
+
+  .ros-graph-modal-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ros-graph-header-tools {
+    margin-left: 0;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .ros-graph-action-buttons {
+    order: 0;
+  }
+
+  #rosGraphSearch {
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
+  }
+}
