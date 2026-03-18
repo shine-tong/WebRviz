@@ -4,7 +4,7 @@
 .. note::
    Chinese is the default language. Use the sidebar language switcher to open the Chinese or English version of the current page.
 
-This site documents the public frontend APIs in WebRviz, including runtime config, ROS communication, RViz sync, point cloud decoding, and scene management.
+This site documents the public frontend APIs in WebRviz, including runtime config, ROS communication, RViz sync, point cloud decoding, scene management, ROS graph snapshot helpers, and motion-trajectory analysis support.
 
 .. toctree::
    :maxdepth: 2

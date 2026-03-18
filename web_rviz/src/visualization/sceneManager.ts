@@ -372,12 +372,9 @@ export class SceneManager {
       return this.robotBaseFrame;
     }
 
-    const linkMap = this.robot.links;
-    if (linkMap) {
-      const linkKeys = Object.keys(linkMap);
-      if (linkKeys.length > 0) {
-        return linkKeys[linkKeys.length - 1];
-      }
+    const urdfLeafLink = this.getDefaultEndEffectorLinkFromUrdf();
+    if (urdfLeafLink) {
+      return urdfLeafLink;
     }
 
     const frameMap = this.robot.frames;
@@ -587,6 +584,89 @@ export class SceneManager {
         ? joint.jointValue.filter((value: unknown): value is number => typeof value === "number" && Number.isFinite(value))
         : []
     };
+  }
+
+  private getDefaultEndEffectorLinkFromUrdf(): string {
+    if (!this.robot?.links) {
+      return "";
+    }
+
+    const linkNames = Object.keys(this.robot.links).filter((name) => typeof name === "string" && name.length > 0);
+    if (linkNames.length === 0) {
+      return "";
+    }
+
+    const linkSet = new Set(linkNames);
+    const linkOrder = new Map<string, number>();
+    for (let index = 0; index < linkNames.length; index += 1) {
+      linkOrder.set(linkNames[index], index);
+    }
+
+    const childrenByParent = new Map<string, string[]>();
+    const hasParent = new Set<string>();
+    for (const joint of Object.values<any>(this.robot.joints || {})) {
+      const parentName = typeof joint?.parent?.urdfName === "string" ? joint.parent.urdfName : "";
+      const childName = this.getJointChildLinkName(joint) || "";
+      if (!parentName || !childName || !linkSet.has(childName)) {
+        continue;
+      }
+      if (!childrenByParent.has(parentName)) {
+        childrenByParent.set(parentName, []);
+      }
+      childrenByParent.get(parentName)?.push(childName);
+      hasParent.add(childName);
+    }
+
+    const leafLinks = linkNames.filter((linkName) => (childrenByParent.get(linkName)?.length ?? 0) === 0);
+    if (leafLinks.length === 0) {
+      return linkNames[linkNames.length - 1] || "";
+    }
+
+    const rootCandidate =
+      (this.robotBaseFrame && linkSet.has(this.robotBaseFrame) ? this.robotBaseFrame : "") ||
+      linkNames.find((linkName) => !hasParent.has(linkName)) ||
+      linkNames[0] ||
+      "";
+
+    const depthByLink = new Map<string, number>();
+    const queue: string[] = [];
+    if (rootCandidate) {
+      depthByLink.set(rootCandidate, 0);
+      queue.push(rootCandidate);
+    }
+
+    while (queue.length > 0) {
+      const linkName = queue.shift();
+      if (!linkName) {
+        continue;
+      }
+      const depth = depthByLink.get(linkName) ?? 0;
+      for (const childName of childrenByParent.get(linkName) || []) {
+        const nextDepth = depth + 1;
+        const knownDepth = depthByLink.get(childName);
+        if (knownDepth === undefined || nextDepth > knownDepth) {
+          depthByLink.set(childName, nextDepth);
+          queue.push(childName);
+        }
+      }
+    }
+
+    let bestLeaf = leafLinks[0] || "";
+    let bestDepth = depthByLink.get(bestLeaf) ?? -1;
+    let bestOrder = linkOrder.get(bestLeaf) ?? -1;
+
+    for (let index = 1; index < leafLinks.length; index += 1) {
+      const candidate = leafLinks[index];
+      const candidateDepth = depthByLink.get(candidate) ?? -1;
+      const candidateOrder = linkOrder.get(candidate) ?? -1;
+      if (candidateDepth > bestDepth || (candidateDepth === bestDepth && candidateOrder > bestOrder)) {
+        bestLeaf = candidate;
+        bestDepth = candidateDepth;
+        bestOrder = candidateOrder;
+      }
+    }
+
+    return bestLeaf;
   }
 
   private getJointChildLinkName(joint: any): string | null {

@@ -6,7 +6,7 @@ Module path: ``web_rviz/src/ros/rosClient.ts``
 Purpose
 -------
 
-Wraps ``roslib`` connection lifecycle, topic creation, and ``rosapi`` service calls.
+Wraps ``roslib`` connection lifecycle, topic creation, and ``rosapi`` service calls used by the ROS info panels and ROS graph snapshots.
 
 Core types
 ----------
@@ -17,6 +17,7 @@ Core types
 - ``MessageTypeDef``: message field metadata.
 - ``MessageDetailsResponse``: message details response.
 - ``ServiceDetailsResponse``: request/response details response.
+- ``NodeDetails``: publishing topics, subscribing topics, and services exposed by a ROS node.
 
 RosClient
 ---------
@@ -60,6 +61,16 @@ Fetches services with type info via ``/rosapi/services`` and ``/rosapi/service_t
 ^^^^^^^^^^^^^^^^
 
 Reads parameter names via ``/rosapi/get_param_names``.
+
+``listNodes()``
+^^^^^^^^^^^^^^^
+
+Reads node names via ``/rosapi/nodes``. Used by the ROS Graph snapshot builder.
+
+``getNodeDetails(node)``
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Loads publishing, subscribing, and service lists for a node via ``/rosapi/node_details``.
 
 ``getParam(name)``
 ^^^^^^^^^^^^^^^^^^

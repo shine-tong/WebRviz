@@ -7,7 +7,7 @@ Purpose
 -------
 
 Owns the Three.js scene, robot state updates, TF cache, theme-aware viewport styling,
-planned-trajectory preview rendering, and point cloud rendering.
+planned-trajectory preview rendering, motion-sampling transforms, and point cloud rendering.
 
 Public types
 ------------
@@ -83,7 +83,7 @@ SceneManager key methods
 - ``setEndEffectorFrame(frame)``: sets end-effector frame.
 - ``setShowOnlyEndEffector(show)``: toggles end-effector-only preview.
 - ``setVisibleTfFrames(frames)``: limits visible TF axes to the provided frame ids, or resets filtering with ``null``.
-- ``getDefaultEndEffectorFrame()``: infers a default TCP/end-effector frame.
+- ``getDefaultEndEffectorFrame()``: infers a default end-effector frame from the loaded robot model.
 - ``getLinkList()`` / ``getFrameList()``: lists robot links and known frames.
 - ``getTfSnapshot()`` / ``getTfNodes()``: reads TF graph snapshots.
 - ``clearTfRecords()``: clears TF cache and visuals.
@@ -103,6 +103,6 @@ Usage notes
 - Call ``dispose()`` before page teardown to avoid WebGL leaks.
 - Use ``setTheme()`` together with the UI theme toggle so the viewport background and grid stay visually consistent.
 - Use ``setVisibleTfFrames()`` to support selective TF visualization without mutating the TF tree text data.
-- Use ``getRobotRelativeTransform()`` when sampling planned motion from robot joint values; it avoids mixing preview data with live TF.
+- Use ``getRobotRelativeTransform()`` when sampling planned motion from robot joint values or converting MoveIt joint trajectory points into TCP curves; it avoids mixing preview data with live TF.
 - Use ``setPlannedTrajectoryPath()`` with ``startPose`` and ``endPose`` to show both the preview line and TCP start/end pose markers.
 - For high-rate point clouds, tune ``maxPoints`` and ``targetFps`` together.
