@@ -6,7 +6,7 @@
 用途
 ----
 
-维护 Three.js 场景、机器人姿态、TF 数据、主题联动的视口样式、规划轨迹预览与点云显示。
+维护 Three.js 场景、机器人姿态、TF 数据、主题联动的视口样式、规划轨迹预览、运动采样位姿计算与点云显示。
 
 公开类型
 --------
@@ -82,7 +82,7 @@ SceneManager 核心方法
 - ``setEndEffectorFrame(frame)``：设置末端执行器坐标系。
 - ``setShowOnlyEndEffector(show)``：切换末端预览模式。
 - ``setVisibleTfFrames(frames)``：限制可见 TF 坐标轴集合；传入 ``null`` 可恢复不过滤状态。
-- ``getDefaultEndEffectorFrame()``：推断默认 TCP / 末端坐标系。
+- ``getDefaultEndEffectorFrame()``：根据已加载的机器人模型推断默认末端坐标系。
 - ``getLinkList()`` / ``getFrameList()``：获取机器人 link 列表与已知 frame 列表。
 - ``getTfSnapshot()`` / ``getTfNodes()``：读取 TF 图快照信息。
 - ``clearTfRecords()``：清空 TF 记录并刷新显示。
@@ -102,6 +102,6 @@ SceneManager 核心方法
 - 页面卸载前应调用 ``dispose()``，避免 WebGL 资源泄漏。
 - 主题切换时应同步调用 ``setTheme()``，确保视口背景与网格颜色和界面风格一致。
 - 需要按需显示 TF 时，优先使用 ``setVisibleTfFrames()``，而不是直接改动 TF 树文本数据。
-- 使用关节采样来预览规划轨迹时，优先调用 ``getRobotRelativeTransform()``，避免把预览轨迹和实时 TF 混在一起。
+- 使用关节采样来预览规划轨迹，或根据 MoveIt 关节轨迹点换算 TCP 曲线时，优先调用 ``getRobotRelativeTransform()``，避免把预览轨迹和实时 TF 混在一起。
 - 使用 ``setPlannedTrajectoryPath()`` 时可同时传入 ``startPose`` 和 ``endPose``，在预览路径的同时显示 TCP 起终点姿态。
 - 高并发点云场景下，建议配合 ``maxPoints`` 与 ``targetFps`` 控制性能。

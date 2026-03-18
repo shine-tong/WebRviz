@@ -6,7 +6,7 @@
 用途
 ----
 
-封装 ``roslib`` 的连接、话题创建、以及 ``rosapi`` 服务调用。
+封装 ``roslib`` 的连接、话题创建、以及 ``rosapi`` 服务调用，并为 `ROS Info` 面板和 `ROS 图谱` 快照提供数据访问能力。
 
 核心类型
 --------
@@ -17,6 +17,7 @@
 - ``MessageTypeDef``：消息字段定义。
 - ``MessageDetailsResponse``：消息详情响应。
 - ``ServiceDetailsResponse``：服务请求/响应详情。
+- ``NodeDetails``：节点的发布话题、订阅话题与服务列表。
 
 RosClient
 ---------
@@ -62,6 +63,16 @@ RosClient
 ^^^^^^^^^^^^^^^^
 
 通过 ``/rosapi/get_param_names`` 返回参数名数组。
+
+``listNodes()``
+^^^^^^^^^^^^^^^
+
+通过 ``/rosapi/nodes`` 返回节点名称列表，供 `ROS 图谱` 构建快照使用。
+
+``getNodeDetails(node)``
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+通过 ``/rosapi/node_details`` 返回指定节点的发布、订阅与 service 信息。
 
 ``getParam(name)``
 ^^^^^^^^^^^^^^^^^^
