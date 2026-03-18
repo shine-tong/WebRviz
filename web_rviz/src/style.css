@@ -586,10 +586,24 @@ button:disabled {
   top: 12px;
   left: 12px;
   width: auto;
+  min-width: 42px;
+  height: auto;
+  padding: 7px 10px;
   z-index: 10;
   border: 1px solid var(--border-toolbar);
   background: var(--overlay-bg);
   backdrop-filter: blur(3px);
+}
+
+#sidebarToggleBtn svg,
+#sidebarToggleBtn svg * {
+  pointer-events: none;
+}
+
+#sidebarToggleBtn svg {
+  width: 20px;
+  height: 20px;
+  display: block;
 }
 
 #rightSidebarToggleBtn {
@@ -1472,13 +1486,12 @@ body {
   top: auto;
   left: auto;
   width: auto;
-  min-width: 68px;
-  padding: 7px 12px;
+  min-width: 42px;
+  height: auto;
+  padding: 7px 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
-  font-weight: 600;
 }
 
 .viewport-toggle-btn {
@@ -1508,6 +1521,11 @@ body {
   display: block;
 }
 
+#resetViewBtn svg {
+  width: 22px;
+  height: 22px;
+}
+
 .viewport-toggle-btn.is-active {
   background: var(--surface-button);
   color: var(--text);
@@ -1533,7 +1551,10 @@ body {
   }
 
   #sidebarToggleBtn {
-    padding: 7px 12px;
+    width: auto;
+    min-width: 40px;
+    height: auto;
+    padding: 7px 9px;
   }
 
   .viewport-toggle-btn {

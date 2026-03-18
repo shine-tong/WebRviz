@@ -147,6 +147,8 @@ const TRAJ_ICON_PAUSE = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6"
 const TRAJ_ICON_CLEAR = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke-width="2" stroke-linecap="round"/></svg>';
 const TRAJ_ICON_PLAN_PATH = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 17a2 2 0 1 0 0.001 0zM12 7a2 2 0 1 0 0.001 0zM18 15a2 2 0 1 0 0.001 0z"/><path d="M7.8 15.9l2.4-6.2M13.7 8.4l2.7 5.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const VIEW_ICON_RESET = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.8 7.2 6.8 12 9.8l4.8-3-4.8-3Z"/><path d="M7.2 6.8V13L12 16V9.8"/><path d="M16.8 6.8V13L12 16"/><path d="M6.4 16.3a7.2 7.2 0 0 0 11 .5"/><path d="M18 16.8v2.7h-2.7"/></svg>';
+const SIDEBAR_ICON_HIDE = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3.8"/><path d="M8.4 4.8v14.4"/><path d="M14.7 12h-5"/><path d="m12.2 9.5-2.5 2.5 2.5 2.5"/></svg>';
+const SIDEBAR_ICON_SHOW = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3.8"/><path d="M8.4 4.8v14.4"/><path d="M9.3 12h5"/><path d="m11.8 9.5 2.5 2.5-2.5 2.5"/></svg>';
 
 function getElements(): AppElements {
   const byId = <T extends HTMLElement>(id: string): T => {
@@ -322,8 +324,11 @@ function updateConnectButtonText(): void {
 }
 
 function updateSidebarToggleUi(): void {
-  elements.sidebarToggleBtn.textContent = sidebarCollapsed ? t(currentLanguage, "button.showSidebar") : t(currentLanguage, "button.hideSidebar");
-  elements.sidebarToggleBtn.setAttribute("aria-label", elements.sidebarToggleBtn.textContent);
+  const label = sidebarCollapsed ? t(currentLanguage, "button.showSidebar") : t(currentLanguage, "button.hideSidebar");
+  elements.sidebarToggleBtn.innerHTML = sidebarCollapsed ? SIDEBAR_ICON_SHOW : SIDEBAR_ICON_HIDE;
+  elements.sidebarToggleBtn.title = label;
+  elements.sidebarToggleBtn.setAttribute("aria-label", label);
+  elements.sidebarToggleBtn.setAttribute("aria-expanded", sidebarCollapsed ? "false" : "true");
 }
 
 function updatePlannedTrajectoryToggleUi(): void {
