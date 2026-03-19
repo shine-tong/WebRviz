@@ -255,11 +255,11 @@ webrviz-theme
 
 ## 中间 3D 视图
 
-- 左上角 `隐藏侧边栏` 按钮用于收起或展开左侧配置区域。
-- 左上角轨迹按钮用于开关 MoveIt 规划轨迹预览；规划成功后会显示轨迹线，以及带 `S / E` 标签的 TCP 起点 / 终点姿态标记。
-- 左上角 `ROS 图谱` 按钮可打开关系图弹窗，支持查看详细 node-topic 图与节点通信图、搜索、刷新和视图自适应。
-- 左上角 `运动曲线` 按钮可打开数据分析弹窗，展示 MoveIt 规划结果对应的关节/TCP 曲线，并支持单位切换与悬停读数。
-- 右上角 `重置视角` 按钮可恢复默认观察视角。
+- 左上角 <img src="web_rviz/assets/iconFont/hide_bar.png" alt="WebRviz" style="height: 1em; vertical-align: middle;"> 按钮用于收起或展开左侧配置区域。
+- 左上角 <img src="web_rviz/assets/iconFont/trajectory.png" alt="WebRviz" style="height: 1em; vertical-align: middle;"> 按钮用于开关 MoveIt 规划轨迹预览；规划成功后会显示轨迹线，以及带 `S / E` 标签的 TCP 起点 / 终点姿态标记。
+- 左上角 <img src="web_rviz/assets/iconFont/graph.png" alt="WebRviz" style="height: 1em; vertical-align: middle;"> 按钮可打开关系图弹窗，支持查看详细 node-topic 图与节点通信图、搜索、刷新和视图自适应。
+- 左上角 <img src="web_rviz/assets/iconFont/data.png" alt="WebRviz" style="height: 1em; vertical-align: middle;"> 按钮可打开数据分析弹窗，展示 MoveIt 规划结果对应的关节/TCP 曲线，并支持单位切换与悬停读数。
+- 右上角 <img src="web_rviz/assets/iconFont/reset_view.png" alt="WebRviz" style="height: 1em; vertical-align: middle;"> 按钮可恢复默认观察视角。
 - 中间视图的背景、网格、机器人材质和规划轨迹显示会跟随亮色 / 暗色主题联动。
 
 ## 轨迹录制与回放
@@ -274,14 +274,14 @@ webrviz-theme
 
 ### 1. ROS 图谱
 
-- 通过左上角 `ROS 图谱` 按钮打开独立弹窗，支持 `Refresh`、`Fit View`、搜索与点击选中详情。
+- 通过左上角 <img src="web_rviz/assets/iconFont/graph.png" alt="WebRviz" style="height: 1em; vertical-align: middle;"> 按钮打开独立弹窗，支持 `Refresh`、`Fit View`、搜索与点击选中详情。
 - `详细图谱` 模式会显示 `node -> topic -> node` 的完整 `Nodes/Topics (all)` 关系，并在右侧展示发布、订阅、service 等详情。
 - `节点通信图` 模式会聚合同一对节点之间的通信边，并在边上显示对应 topic 标签，便于快速查看主要通信关系。
 - 图谱数据来自 `rosapi` 的 `/rosapi/nodes` 与 `/rosapi/node_details`，并复用 topic/type 缓存补全消息类型信息。
 
 ### 2. 运动曲线
 
-- 通过左上角 `运动曲线` 按钮打开独立弹窗，曲线数据来自 `/move_group/result` 中 `planned_trajectory.joint_trajectory.points` 的轨迹点。
+- 通过左上角 <img src="web_rviz/assets/iconFont/data.png" alt="WebRviz" style="height: 1em; vertical-align: middle;"> 按钮打开独立弹窗，曲线数据来自 `/move_group/result` 中 `planned_trajectory.joint_trajectory.points` 的轨迹点。
 - 支持显示 `关节轨迹`、`TCP 轨迹`、`关节速度`、`关节加速度` 和 `力矩` 五类曲线；当某类数据缺失时会保留空图框。
 - 支持 `deg/rad`、`mm/m`、`deg/s/rad/s`、`deg/s^2/rad/s^2` 单位切换，以及 joint 可见性筛选、`全部 / 重置` 快捷操作。
 - 鼠标悬停在曲线附近时可查看当前时间与对应数值，便于快速读数与比对。
