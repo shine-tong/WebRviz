@@ -1,5 +1,7 @@
 ﻿# Do not commit local MoveIt config workspace
 five_axis_moveit_config/
+mr12_moveit_config/
+mr12urdf20240605/
 
 # Frontend dependencies and build outputs
 web_rviz/node_modules/
