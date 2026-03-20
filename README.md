@@ -7,6 +7,8 @@
 
 `WebRviz` 是一个运行在本地浏览器中的轻量级可视化工具，目标是将网页端显示与 `RViz` 的核心数据保持同步，并支持后续嵌入 Qt 界面。
 
+ROS2 jazzy 版本请查看 [jazzy 分支](https://github.com/shine-tong/WebRviz/tree/jazzy)。
+
 ---
 
 ## 功能特性
