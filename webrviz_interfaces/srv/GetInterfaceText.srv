@@ -1,0 +1,5 @@
+string type_name
+---
+bool success
+string message
+string raw_text

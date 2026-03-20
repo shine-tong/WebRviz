@@ -1,6 +1,6 @@
 ﻿import "./style.css";
 import { Vector3 } from "three";
-import { RuntimeConfig, loadConfig, saveConfig } from "./config";
+import { RuntimeConfig, defaultConfig, loadConfig, saveConfig } from "./config";
 import { decodePointCloud2 } from "./ros/pointcloud";
 import { ConnectionState, MessageDetailsResponse, MessageTypeDef, NodeDetails, RosClient, ServiceInfo, TopicInfo } from "./ros/rosClient";
 import { loadRvizSyncHints } from "./rviz/rvizConfig";
@@ -108,11 +108,9 @@ interface TopicSubscriptions {
   tf?: any;
   tfStatic?: any;
   pointCloud?: any;
-  moveGroupGoal?: any;
-  moveGroupResult?: any;
   displayTrajectory?: any;
-  executeTrajectoryGoal?: any;
-  executeTrajectoryResult?: any;
+  moveItPlanEvent?: any;
+  moveItExecuteEvent?: any;
 }
 
 interface JointSnapshot {
@@ -144,6 +142,38 @@ interface TrajectoryPointPayload {
     sec?: number;
     nanosec?: number;
   };
+}
+
+interface MoveItDisplayTrajectoryMessage {
+  trajectory_start?: {
+    joint_state?: {
+      name?: string[];
+      position?: number[];
+    };
+  };
+  trajectory?: Array<{
+    joint_trajectory?: {
+      joint_names?: string[];
+      points?: TrajectoryPointPayload[];
+    };
+  }>;
+}
+
+interface MoveItObserverEvent {
+  kind: string;
+  actionName: string;
+  goalId: string;
+  statusCode?: number;
+  statusText: string;
+  state: string;
+  errorCode?: number;
+  planningTime?: number;
+  timestamp: string;
+  source: string;
+}
+
+interface StringMessage {
+  data?: string;
 }
 
 interface MotionSample {
@@ -285,12 +315,14 @@ interface RosGraphVisibleData {
   edges: RosGraphEdge[];
 }
 
-const POINTCLOUD2_TYPE = "sensor_msgs/PointCloud2";
-const MOVE_GROUP_GOAL_TOPIC = "/move_group/goal";
-const MOVE_GROUP_RESULT_TOPIC = "/move_group/result";
-const DISPLAY_TRAJECTORY_TOPICS = ["/move_group/display_planned_path", "/display_planned_path"] as const;
-const EXECUTE_TRAJECTORY_GOAL_TOPIC = "/execute_trajectory/goal";
-const EXECUTE_TRAJECTORY_RESULT_TOPIC = "/execute_trajectory/result";
+const POINTCLOUD2_TYPES = ["sensor_msgs/msg/PointCloud2", "sensor_msgs/PointCloud2"] as const;
+const JOINT_STATE_TOPIC_TYPES = ["sensor_msgs/msg/JointState", "sensor_msgs/JointState"] as const;
+const TF_MESSAGE_TYPES = ["tf2_msgs/msg/TFMessage", "tf2_msgs/TFMessage"] as const;
+const DISPLAY_TRAJECTORY_TYPES = ["moveit_msgs/msg/DisplayTrajectory", "moveit_msgs/DisplayTrajectory"] as const;
+const MOVEIT_OBSERVER_EVENT_TYPES = ["std_msgs/msg/String", "std_msgs/String"] as const;
+const DISPLAY_TRAJECTORY_TOPICS = ["/display_planned_path", "/move_group/display_planned_path"] as const;
+const MOVEIT_PLAN_EVENT_TOPIC = "/webrviz/moveit/plan_event";
+const MOVEIT_EXECUTE_EVENT_TOPIC = "/webrviz/moveit/execute_event";
 const SIDEBAR_STATE_KEY = "webrviz-sidebar-collapsed";
 const RIGHT_SIDEBAR_STATE_KEY = "webrviz-right-sidebar-collapsed";
 const TRAJ_SAMPLE_INTERVAL_MS = 50;
@@ -320,6 +352,7 @@ const ROS_GRAPH_COMPONENT_GAP = 110;
 const ROS_GRAPH_FIT_PADDING = 56;
 const ROS_GRAPH_NODE_HEIGHT = 42;
 const ROS_GRAPH_TOPIC_HEIGHT = 36;
+const ROS_GRAPH_NODE_DETAIL_CONCURRENCY = 4;
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 function getElements(): AppElements {
@@ -439,7 +472,6 @@ let lastPointCloudTimestamp = 0;
 let plannedTrajectoryVisible = true;
 let latestPlannedTrajectory: PlannedTrajectoryPayload | null = null;
 let pendingPlannedTrajectory: PlannedTrajectoryPayload | null = null;
-let moveItPreviewArmed = false;
 let sidebarCollapsed = window.localStorage.getItem(SIDEBAR_STATE_KEY) === "1";
 let rightSidebarCollapsed = window.localStorage.getItem(RIGHT_SIDEBAR_STATE_KEY) !== "0";
 let jointState: JointSnapshot[] = [];
@@ -469,11 +501,11 @@ type AngleUnit = "deg" | "rad";
 type LengthUnit = "mm" | "m";
 type TfVisibilityMode = "all" | "none" | "selection";
 
-const PARAM_EXCLUDE = new Set<string>([
-  "/robot_description",
-  "/robot_description_semantic",
-  "/robot_description_kinematics"
-]);
+const PARAM_EXCLUDE_SUFFIXES = [
+  "robot_description",
+  "robot_description_semantic",
+  "robot_description_kinematics"
+] as const;
 const MAX_PARAM_VALUE_LENGTH = 500;
 
 let rightPanelTab: RightPanelTab = "robot";
@@ -693,28 +725,36 @@ function findTopicInfo(name: string): TopicInfo | undefined {
   return topics.find((topic) => topic.name === name);
 }
 
+function normalizeTopicType(type: string): string {
+  return (type || "").trim().replace(/\/msg\//g, "/");
+}
+
+function topicTypeMatches(actualType: string, candidates: readonly string[]): boolean {
+  const normalized = normalizeTopicType(actualType);
+  return candidates.some((candidate) => normalizeTopicType(candidate) === normalized);
+}
+
+function resolveTopicType(name: string, fallbackTypes: readonly string[]): string {
+  const info = findTopicInfo(name);
+  return info?.type || fallbackTypes[0];
+}
+
 function actionStatusText(statusCode: number): string {
   switch (statusCode) {
     case 0:
-      return "pending";
+      return "unknown";
     case 1:
-      return "active";
+      return "accepted";
     case 2:
-      return "preempted";
+      return "executing";
     case 3:
-      return "succeeded";
+      return "canceling";
     case 4:
-      return "aborted";
+      return "succeeded";
     case 5:
-      return "rejected";
+      return "canceled";
     case 6:
-      return "preempting";
-    case 7:
-      return "recalling";
-    case 8:
-      return "recalled";
-    case 9:
-      return "lost";
+      return "aborted";
     default:
       return "unknown(" + String(statusCode) + ")";
   }
@@ -727,11 +767,81 @@ function formatSecondsValue(value: unknown, digits = 2): string | null {
   return value.toFixed(digits) + "s";
 }
 
+function shouldExcludeParamName(name: string): boolean {
+  const normalized = (name || "").trim().replace(/^\/+/, "").toLowerCase();
+  return PARAM_EXCLUDE_SUFFIXES.some((suffix) => (
+    normalized === suffix
+    || normalized.endsWith(":" + suffix)
+    || normalized.endsWith("." + suffix)
+    || normalized.endsWith("/" + suffix)
+  ));
+}
+
+function toFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
 function isMoveItPlanSuccessful(statusCode: number, errorCode?: number): boolean {
   if (typeof errorCode === "number") {
     return errorCode === 1;
   }
-  return statusCode === 3;
+  return statusCode === 4;
+}
+
+function parseMoveItObserverEvent(message: unknown): MoveItObserverEvent | null {
+  let payload: unknown = message;
+  if (payload && typeof payload === "object" && typeof (payload as StringMessage).data === "string") {
+    try {
+      payload = JSON.parse((payload as StringMessage).data || "");
+    } catch {
+      return null;
+    }
+  }
+
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const value = payload as Record<string, unknown>;
+  const kind = typeof value.kind === "string" ? value.kind : "";
+  if (!kind) {
+    return null;
+  }
+
+  return {
+    kind,
+    actionName: typeof value.action_name === "string" ? value.action_name : "",
+    goalId: typeof value.goal_id === "string" ? value.goal_id : "",
+    statusCode: toFiniteNumber(value.status_code),
+    statusText: typeof value.status_text === "string" ? value.status_text : "",
+    state: typeof value.state === "string" ? value.state : "",
+    errorCode: toFiniteNumber(value.error_code),
+    planningTime: toFiniteNumber(value.planning_time),
+    timestamp: typeof value.timestamp === "string" ? value.timestamp : "",
+    source: typeof value.source === "string" ? value.source : ""
+  };
+}
+
+function observerEventStatusText(event: MoveItObserverEvent): string {
+  if (event.statusText) {
+    return event.statusText;
+  }
+  if (typeof event.statusCode === "number") {
+    return actionStatusText(event.statusCode);
+  }
+  if (event.state) {
+    return event.state;
+  }
+  return "unknown";
 }
 
 function toPlannedTrajectoryRestoreState(
@@ -1145,29 +1255,24 @@ function updateTrajectoryChartsFromMoveItResult(resultMessage: {
   setTrajectoryChartsFromJointTrajectory(jointNames, points);
 }
 
-function updatePlannedTrajectoryFromDisplayTrajectory(message: {
-  trajectory_start?: {
-    joint_state?: {
-      name?: string[];
-      position?: number[];
-    };
-  };
-  trajectory?: Array<{
-    joint_trajectory?: {
-      joint_names?: string[];
-      points?: Array<{ positions?: number[] }>;
-    };
-  }>;
-}): void {
+function updatePlannedTrajectoryFromDisplayTrajectory(message: MoveItDisplayTrajectoryMessage): void {
   const restoreState = toPlannedTrajectoryRestoreState(message.trajectory_start?.joint_state);
   const trajectories = Array.isArray(message.trajectory) ? message.trajectory : [];
   for (let index = trajectories.length - 1; index >= 0; index -= 1) {
     const jointTrajectory = trajectories[index]?.joint_trajectory;
-    const pointCount = Array.isArray(jointTrajectory?.points) ? jointTrajectory.points.length : 0;
-    if (pointCount >= 2) {
-      queuePlannedTrajectoryFromJointTrajectory(jointTrajectory, "display", restoreState);
-      return;
+    const jointNames = Array.isArray(jointTrajectory?.joint_names)
+      ? jointTrajectory.joint_names.filter((name): name is string => typeof name === "string" && name.length > 0)
+      : [];
+    const points = Array.isArray(jointTrajectory?.points) ? jointTrajectory.points : [];
+    if (jointNames.length === 0 || points.length === 0) {
+      continue;
     }
+
+    setTrajectoryChartsFromJointTrajectory(jointNames, points);
+    if (points.length >= 2) {
+      queuePlannedTrajectoryFromJointTrajectory(jointTrajectory, "display", restoreState);
+    }
+    return;
   }
 }
 function findDisplayTrajectoryTopicInfo(): TopicInfo | undefined {
@@ -1181,23 +1286,86 @@ function findDisplayTrajectoryTopicInfo(): TopicInfo | undefined {
   return topics.find((topic) => /(^|\/)DisplayTrajectory$/.test(topic.type));
 }
 
+function handleMoveItPlanEvent(message: unknown): void {
+  const event = parseMoveItObserverEvent(message);
+  if (!event) {
+    logMoveIt("observer payload ignored: invalid plan event");
+    return;
+  }
+
+  if (event.source === "status" && event.state === "accepted") {
+    clearPlannedTrajectoryState();
+    clearTrajectoryChartsState();
+    logMoveIt("planning started | action=" + (event.actionName || "unknown"));
+    return;
+  }
+
+  if (event.source !== "result") {
+    return;
+  }
+
+  if (!isMoveItPlanSuccessful(event.statusCode ?? -1, event.errorCode)) {
+    clearPlannedTrajectoryState();
+    clearTrajectoryChartsState();
+  }
+
+  const parts = [
+    "planning finished",
+    "status=" + observerEventStatusText(event)
+  ];
+
+  const planningTime = formatSecondsValue(event.planningTime, 3);
+  if (planningTime) {
+    parts.push("planning_time=" + planningTime);
+  }
+  if (typeof event.errorCode === "number") {
+    parts.push("error_code=" + String(event.errorCode));
+  }
+
+  logMoveIt(parts.join(" | "));
+}
+
+function handleMoveItExecuteEvent(message: unknown): void {
+  const event = parseMoveItObserverEvent(message);
+  if (!event) {
+    logMoveIt("observer payload ignored: invalid execute event");
+    return;
+  }
+
+  if (event.source === "status" && event.state === "accepted") {
+    logMoveIt("execution started | action=" + (event.actionName || "unknown"));
+    return;
+  }
+
+  if (event.source !== "result") {
+    return;
+  }
+
+  const parts = [
+    "execution finished",
+    "status=" + observerEventStatusText(event)
+  ];
+
+  if (typeof event.errorCode === "number") {
+    parts.push("error_code=" + String(event.errorCode));
+  }
+
+  logMoveIt(parts.join(" | "));
+}
+
 function subscribeMoveItTopics(): void {
-  unsubscribe(subscriptions.moveGroupGoal);
-  unsubscribe(subscriptions.moveGroupResult);
   unsubscribe(subscriptions.displayTrajectory);
-  unsubscribe(subscriptions.executeTrajectoryGoal);
-  unsubscribe(subscriptions.executeTrajectoryResult);
-  subscriptions.moveGroupGoal = undefined;
-  subscriptions.moveGroupResult = undefined;
+  unsubscribe(subscriptions.moveItPlanEvent);
+  unsubscribe(subscriptions.moveItExecuteEvent);
   subscriptions.displayTrajectory = undefined;
-  subscriptions.executeTrajectoryGoal = undefined;
-  subscriptions.executeTrajectoryResult = undefined;
+  subscriptions.moveItPlanEvent = undefined;
+  subscriptions.moveItExecuteEvent = undefined;
 
   const subscribed: string[] = [];
 
   const subscribeResolvedTopic = (
     info: TopicInfo | undefined,
-    fallbackType: string,
+    fallbackTypes: readonly string[],
     assign: (topic: any) => void,
     onMessage: (message: unknown) => void
   ): void => {
@@ -1205,182 +1373,44 @@ function subscribeMoveItTopics(): void {
       return;
     }
 
-    const topicName = info.name;
-    const topicType = info.type || fallbackType;
     try {
-      const topic = rosClient.createTopic(topicName, topicType);
+      const topic = rosClient.createTopic(info.name, info.type || fallbackTypes[0]);
       topic.subscribe(onMessage);
       assign(topic);
-      subscribed.push(topicName);
+      subscribed.push(info.name);
     } catch (error) {
-      logMoveIt("monitor skipped " + topicName + ": " + formatError(error));
+      logMoveIt("monitor skipped " + info.name + ": " + formatError(error));
     }
   };
 
-  const subscribeIfAvailable = (
-    topicName: string,
-    fallbackType: string,
-    assign: (topic: any) => void,
-    onMessage: (message: unknown) => void
-  ): void => {
-    subscribeResolvedTopic(findTopicInfo(topicName), fallbackType, assign, onMessage);
-  };
-
-  subscribeIfAvailable(MOVE_GROUP_GOAL_TOPIC, "moveit_msgs/MoveGroupActionGoal", (topic) => {
-    subscriptions.moveGroupGoal = topic;
-  }, (message) => {
-    const goal = message as {
-      goal?: {
-        request?: {
-          planner_id?: string;
-          group_name?: string;
-          num_planning_attempts?: number;
-          allowed_planning_time?: number;
-        };
-        planning_options?: {
-          plan_only?: boolean;
-        };
-      };
-    };
-
-    const request = goal.goal?.request;
-    const plannerId = request?.planner_id?.trim() || "default";
-    const groupName = request?.group_name?.trim() || "unknown";
-    const parts = [
-      "MoveIt planning started",
-      "planner=" + plannerId,
-      "group=" + groupName
-    ];
-
-    if (typeof request?.num_planning_attempts === "number" && Number.isFinite(request.num_planning_attempts)) {
-      parts.push("attempts=" + String(request.num_planning_attempts));
-    }
-
-    const allowedTime = formatSecondsValue(request?.allowed_planning_time);
-    if (allowedTime) {
-      parts.push("allowed_time=" + allowedTime);
-    }
-
-    if (goal.goal?.planning_options?.plan_only) {
-      parts.push("plan_only=true");
-    }
-
-    moveItPreviewArmed = true;
-    clearPlannedTrajectoryState();
-    logMoveIt(parts.join(" | "));
-  });
-
-  subscribeIfAvailable(MOVE_GROUP_RESULT_TOPIC, "moveit_msgs/MoveGroupActionResult", (topic) => {
-    subscriptions.moveGroupResult = topic;
-  }, (message) => {
-    const resultMessage = message as {
-      status?: { status?: number };
-      result?: {
-        planning_time?: number;
-        error_code?: { val?: number };
-        planned_trajectory?: {
-          joint_trajectory?: {
-            joint_names?: string[];
-            points?: TrajectoryPointPayload[];
-          };
-        };
-      };
-    };
-
-    updateTrajectoryChartsFromMoveItResult(resultMessage);
-    if (!moveItPreviewArmed) {
-      return;
-    }
-
-    const statusCode = typeof resultMessage.status?.status === "number" ? resultMessage.status.status : -1;
-    const parts = [
-      "MoveIt planning finished",
-      "status=" + actionStatusText(statusCode)
-    ];
-
-    const planningTime = formatSecondsValue(resultMessage.result?.planning_time, 3);
-    if (planningTime) {
-      parts.push("planning_time=" + planningTime);
-    }
-
-    if (typeof resultMessage.result?.error_code?.val === "number") {
-      parts.push("error_code=" + String(resultMessage.result.error_code.val));
-    }
-
-    updatePlannedTrajectoryFromMoveItResult(resultMessage);
-    logMoveIt(parts.join(" | "));
-  });
-
-  subscribeResolvedTopic(findDisplayTrajectoryTopicInfo(), "moveit_msgs/DisplayTrajectory", (topic) => {
+  subscribeResolvedTopic(findDisplayTrajectoryTopicInfo(), DISPLAY_TRAJECTORY_TYPES, (topic) => {
     subscriptions.displayTrajectory = topic;
   }, (message) => {
-    if (!moveItPreviewArmed) {
-      return;
-    }
-    updatePlannedTrajectoryFromDisplayTrajectory(message as {
-      trajectory?: Array<{
-        joint_trajectory?: {
-          joint_names?: string[];
-          points?: Array<{ positions?: number[] }>;
-        };
-      }>;
-    });
+    updatePlannedTrajectoryFromDisplayTrajectory(message as MoveItDisplayTrajectoryMessage);
   });
 
-  subscribeIfAvailable(EXECUTE_TRAJECTORY_GOAL_TOPIC, "moveit_msgs/ExecuteTrajectoryActionGoal", (topic) => {
-    subscriptions.executeTrajectoryGoal = topic;
+  subscribeResolvedTopic(findTopicInfo(MOVEIT_PLAN_EVENT_TOPIC), MOVEIT_OBSERVER_EVENT_TYPES, (topic) => {
+    subscriptions.moveItPlanEvent = topic;
   }, (message) => {
-    const goal = message as {
-      goal?: {
-        trajectory?: {
-          joint_trajectory?: {
-            joint_names?: string[];
-            points?: unknown[];
-          };
-        };
-      };
-    };
-
-    const jointCount = Array.isArray(goal.goal?.trajectory?.joint_trajectory?.joint_names)
-      ? goal.goal?.trajectory?.joint_trajectory?.joint_names?.length ?? 0
-      : 0;
-    const pointCount = Array.isArray(goal.goal?.trajectory?.joint_trajectory?.points)
-      ? goal.goal?.trajectory?.joint_trajectory?.points?.length ?? 0
-      : 0;
-    const parts = ["MoveIt execution started"];
-
-    if (jointCount > 0) {
-      parts.push("joints=" + String(jointCount));
-    }
-    if (pointCount > 0) {
-      parts.push("points=" + String(pointCount));
-    }
-
-    logMoveIt(parts.join(" | "));
+    handleMoveItPlanEvent(message);
   });
 
-  subscribeIfAvailable(EXECUTE_TRAJECTORY_RESULT_TOPIC, "moveit_msgs/ExecuteTrajectoryActionResult", (topic) => {
-    subscriptions.executeTrajectoryResult = topic;
+  subscribeResolvedTopic(findTopicInfo(MOVEIT_EXECUTE_EVENT_TOPIC), MOVEIT_OBSERVER_EVENT_TYPES, (topic) => {
+    subscriptions.moveItExecuteEvent = topic;
   }, (message) => {
-    const resultMessage = message as {
-      status?: { status?: number };
-      result?: {
-        error_code?: { val?: number };
-      };
-    };
-
-    const statusCode = typeof resultMessage.status?.status === "number" ? resultMessage.status.status : -1;
-    const parts = [
-      "MoveIt execution finished",
-      "status=" + actionStatusText(statusCode)
-    ];
-
-    if (typeof resultMessage.result?.error_code?.val === "number") {
-      parts.push("error_code=" + String(resultMessage.result.error_code.val));
-    }
-
-    logMoveIt(parts.join(" | "));
+    handleMoveItExecuteEvent(message);
   });
+
+  if (!subscriptions.moveItPlanEvent || !subscriptions.moveItExecuteEvent) {
+    const missingTopics: string[] = [];
+    if (!subscriptions.moveItPlanEvent) {
+      missingTopics.push(MOVEIT_PLAN_EVENT_TOPIC);
+    }
+    if (!subscriptions.moveItExecuteEvent) {
+      missingTopics.push(MOVEIT_EXECUTE_EVENT_TOPIC);
+    }
+    logMoveIt("observer topics not detected: " + missingTopics.join(", ") + " | preview remains available via DisplayTrajectory");
+  }
 
   if (subscribed.length > 0) {
     logMoveIt("monitor subscribed: " + subscribed.join(", "));
@@ -1914,23 +1944,18 @@ async function showServiceTypeDetails(type: string): Promise<void> {
 
   try {
     showDetailModal(t(currentLanguage, "detail.loadingService", { type }));
-    const details = await rosClient.getServiceDetails(type);
 
-    const requestText = formatMessageDetailAutoRoot(`${type}Request`, details.request);
-    const responseText = formatMessageDetailAutoRoot(`${type}Response`, details.response);
+    if (hasTypeDescriptionService()) {
+      if (hasTypeDescriptionService()) {
+        const helperRaw = await rosClient.getTypeDescription(type);
+        if (helperRaw) {
+          showDetailModal(formatRawMessageDetail(type, helperRaw));
+          return;
+        }
+      }
+    }
 
-    const output = [
-      `# ${type}`,
-      "----------------------------------",
-      "",
-      t(currentLanguage, "detail.request"),
-      requestText,
-      "",
-      t(currentLanguage, "detail.response"),
-      responseText
-    ].join("\n");
-
-    showDetailModal(output);
+    showDetailModal(t(currentLanguage, "detail.noMessageInfo", { type }));
   } catch (error) {
     const detail = formatError(error);
     showDetailModal(t(currentLanguage, "detail.serviceUnavailable", { type, detail }));
@@ -1972,6 +1997,18 @@ function addInfoItem(container: HTMLElement, name: string, actionText: string, a
   container.appendChild(item);
 }
 
+function formatRawMessageDetail(type: string, raw: string): string {
+  return [
+    `# ${type}`,
+    "----------------------------------",
+    raw.trim()
+  ].join("\n");
+}
+
+function hasTypeDescriptionService(): boolean {
+  return services.some((service) => service.name === "/webrviz/get_interface_text");
+}
+
 async function showTopicTypeDetails(type: string): Promise<void> {
   if (!type) {
     showDetailModal(t(currentLanguage, "detail.noTypeForTopic"));
@@ -1980,9 +2017,38 @@ async function showTopicTypeDetails(type: string): Promise<void> {
 
   try {
     showDetailModal(t(currentLanguage, "detail.loadingMessage", { type }));
-    const details = await rosClient.getMessageDetails(type);
-    showDetailModal(formatMessageDetail(type, details));
+    const raw = await rosClient.getRawMessageDefinition(type);
+    if (raw) {
+      showDetailModal(formatRawMessageDetail(type, raw));
+      return;
+    }
+
+    if (hasTypeDescriptionService()) {
+      const helperRaw = await rosClient.getTypeDescription(type);
+      if (helperRaw) {
+        showDetailModal(formatRawMessageDetail(type, helperRaw));
+        return;
+      }
+    }
+
+    showDetailModal(t(currentLanguage, "detail.noMessageInfo", { type }));
   } catch (error) {
+    try {
+      const raw = await rosClient.getRawMessageDefinition(type);
+      if (raw) {
+        showDetailModal(formatRawMessageDetail(type, raw));
+        return;
+      }
+
+      const helperRaw = await rosClient.getTypeDescription(type);
+      if (helperRaw) {
+        showDetailModal(formatRawMessageDetail(type, helperRaw));
+        return;
+      }
+    } catch {
+      // ignore fallback failure and surface the original error
+    }
+
     const detail = formatError(error);
     showDetailModal(t(currentLanguage, "detail.messageError", { type, detail }));
     log(`message detail failed: ${detail}`);
@@ -2016,7 +2082,7 @@ async function showAllParamValues(): Promise<void> {
     lines.push(t(currentLanguage, "detail.parametersTitle"));
     lines.push("----------------------------------");
 
-    const sorted = params.filter((name) => !PARAM_EXCLUDE.has(name)).sort((left, right) => left.localeCompare(right));
+    const sorted = params.filter((name) => !shouldExcludeParamName(name)).sort((left, right) => left.localeCompare(right));
 
     for (const param of sorted) {
       try {
@@ -2099,21 +2165,40 @@ async function refreshRosInfoCache(): Promise<void> {
     return;
   }
 
-  try {
-    const [nextServices, nextParams] = await Promise.all([
-      rosClient.listServicesWithTypes(),
-      rosClient.listParams()
-    ]);
+  const [servicesResult, paramsResult] = await Promise.allSettled([
+    rosClient.listServicesWithTypes(),
+    rosClient.listParams()
+  ]);
 
-    services = nextServices;
-    params = nextParams;
-    renderRosInfoPanel();
-    log(`ROS info discovery finished: ${services.length} services, ${params.length} params`);
-  } catch (error) {
-    const detail = formatError(error);
-    log(`ROS info discovery warning: ${detail}`);
-    renderRosInfoPanel();
+  const warnings: string[] = [];
+
+  if (servicesResult.status === "fulfilled") {
+    services = servicesResult.value;
+  } else {
+    services = [];
+    warnings.push(`services unavailable: ${formatError(servicesResult.reason)}`);
   }
+
+  if (paramsResult.status === "fulfilled") {
+    params = paramsResult.value;
+  } else {
+    params = [];
+    const detail = formatError(paramsResult.reason);
+    if (detail.includes("/rosapi/get_param_names") && detail.toLowerCase().includes("timeout")) {
+      warnings.push(`params unavailable: ${detail}; try starting rosapi_node with --ros-args -p params_timeout:=15.0`);
+    } else {
+      warnings.push(`params unavailable: ${detail}`);
+    }
+  }
+
+  renderRosInfoPanel();
+
+  if (warnings.length === 0) {
+    log(`ROS info discovery finished: ${services.length} services, ${params.length} params`);
+    return;
+  }
+
+  log(`ROS info discovery partial: ${services.length} services, ${params.length} params (${warnings.join('; ')})`);
 }
 function quatToEuler(rotation: { x: number; y: number; z: number; w: number }): {
   roll: number;
@@ -2845,7 +2930,6 @@ function clearTrajectory(): void {
 }
 
 function clearAllTrajectoryDisplays(): void {
-  moveItPreviewArmed = false;
   clearPlannedTrajectoryState();
   clearTrajectory();
 }
@@ -3593,10 +3677,10 @@ function renderConfigToUi(): void {
 }
 
 function syncConfigFromUi(): void {
-  config.rosbridgeUrl = elements.rosbridgeUrl.value.trim() || config.rosbridgeUrl;
-  config.rvizConfigPath = elements.rvizConfigPath.value.trim() || config.rvizConfigPath;
-  config.urdfFallbackPath = elements.urdfFallbackPath.value.trim() || config.urdfFallbackPath;
-  config.packageRootUrl = elements.packageRootUrl.value.trim() || config.packageRootUrl;
+  config.rosbridgeUrl = elements.rosbridgeUrl.value.trim() || defaultConfig.rosbridgeUrl;
+  config.rvizConfigPath = elements.rvizConfigPath.value.trim() || defaultConfig.rvizConfigPath;
+  config.urdfFallbackPath = elements.urdfFallbackPath.value.trim();
+  config.packageRootUrl = elements.packageRootUrl.value.trim() || defaultConfig.packageRootUrl;
   saveConfig(config);
 }
 
@@ -3617,17 +3701,15 @@ function clearSubscriptions(): void {
   unsubscribe(subscriptions.tf);
   unsubscribe(subscriptions.tfStatic);
   unsubscribe(subscriptions.pointCloud);
-  unsubscribe(subscriptions.moveGroupGoal);
-  unsubscribe(subscriptions.moveGroupResult);
   unsubscribe(subscriptions.displayTrajectory);
-  unsubscribe(subscriptions.executeTrajectoryGoal);
-  unsubscribe(subscriptions.executeTrajectoryResult);
+  unsubscribe(subscriptions.moveItPlanEvent);
+  unsubscribe(subscriptions.moveItExecuteEvent);
   subscriptions = {};
 }
 
 function pointCloudTopicNames(sourceTopics: TopicInfo[]): string[] {
   return sourceTopics
-    .filter((topic) => topic.type === POINTCLOUD2_TYPE)
+    .filter((topic) => topicTypeMatches(topic.type, POINTCLOUD2_TYPES))
     .map((topic) => topic.name)
     .sort((left, right) => left.localeCompare(right));
 }
@@ -3680,7 +3762,10 @@ async function subscribeCoreTopics(): Promise<void> {
   unsubscribe(subscriptions.tf);
   unsubscribe(subscriptions.tfStatic);
 
-  subscriptions.jointStates = rosClient.createTopic("/joint_states", "sensor_msgs/JointState");
+  subscriptions.jointStates = rosClient.createTopic(
+    "/joint_states",
+    resolveTopicType("/joint_states", JOINT_STATE_TOPIC_TYPES)
+  );
   subscriptions.jointStates.subscribe((message: unknown) => {
     if (isPlaying || isPlaybackPaused) {
       return;
@@ -3692,14 +3777,14 @@ async function subscribeCoreTopics(): Promise<void> {
     scheduleRightPanelUpdate();
   });
 
-  subscriptions.tf = rosClient.createTopic("/tf", "tf2_msgs/TFMessage");
+  subscriptions.tf = rosClient.createTopic("/tf", resolveTopicType("/tf", TF_MESSAGE_TYPES));
   subscriptions.tf.subscribe((message: unknown) => {
     sceneManager.upsertTfMessage(message);
     retryPendingPlannedTrajectory();
     scheduleRightPanelUpdate();
   });
 
-  subscriptions.tfStatic = rosClient.createTopic("/tf_static", "tf2_msgs/TFMessage");
+  subscriptions.tfStatic = rosClient.createTopic("/tf_static", resolveTopicType("/tf_static", TF_MESSAGE_TYPES));
   subscriptions.tfStatic.subscribe((message: unknown) => {
     sceneManager.upsertTfMessage(message);
     retryPendingPlannedTrajectory();
@@ -3718,7 +3803,7 @@ async function subscribePointCloud(topicName: string): Promise<void> {
   }
 
   const throttleRate = Math.floor(1000 / Math.max(1, config.targetFps));
-  subscriptions.pointCloud = rosClient.createTopic(topicName, POINTCLOUD2_TYPE, throttleRate);
+  subscriptions.pointCloud = rosClient.createTopic(topicName, resolveTopicType(topicName, POINTCLOUD2_TYPES), throttleRate);
 
   subscriptions.pointCloud.subscribe((message: unknown) => {
     const now = Date.now();
@@ -3738,7 +3823,7 @@ async function loadRobotIntoScene(): Promise<void> {
   const loaded = await loadRobotModel(rosClient, config.urdfFallbackPath, config.packageRootUrl);
   sceneManager.setRobot(loaded.robot, loaded.rootLink);
   refreshLatestPlannedTrajectoryPreview();
-  log(`robot model loaded (root=${loaded.rootLink})`);
+  log(`robot model loaded (root=${loaded.rootLink} | source=${loaded.source || "unknown"})`);
 }
 
 async function connect(): Promise<void> {
@@ -3749,6 +3834,17 @@ async function connect(): Promise<void> {
 
   await rosClient.connect(config.rosbridgeUrl);
   log("rosbridge connected");
+
+  try {
+    const rosVersion = await rosClient.getRosVersion();
+    const detail = `ROS ${rosVersion.version || "?"}${rosVersion.distro ? ` ${rosVersion.distro}` : ""}`.trim();
+    log(`ROS version detected: ${detail}`);
+    if (rosVersion.version !== 2 || (rosVersion.distro && rosVersion.distro.toLowerCase() !== "jazzy")) {
+      log(`ROS version warning: expected ROS 2 jazzy, got ${detail}`);
+    }
+  } catch (error) {
+    log(`ROS version check warning: ${formatError(error)}`);
+  }
 
   try {
     await loadRobotIntoScene();
@@ -4132,20 +4228,30 @@ function buildRosGraphNodeCommunicationView(nodeEntities: RosGraphNodeEntity[], 
   return buildRosGraphViewSnapshot(communicationNodes, edges);
 }
 
-function buildRosGraphSnapshot(nodeEntries: Array<{ name: string; details: NodeDetails }>, partialFailures: string[]): RosGraphSnapshot {
+function buildRosGraphSnapshot(
+  nodeNames: string[],
+  nodeEntries: Array<{ name: string; details: NodeDetails }>,
+  partialFailures: string[]
+): RosGraphSnapshot {
   const topicTypeByName = new Map<string, string>();
   for (const topic of topics) {
     topicTypeByName.set(topic.name, topic.type);
   }
 
+  const detailsByName = new Map<string, NodeDetails>();
+  for (const entry of nodeEntries) {
+    detailsByName.set(entry.name, entry.details);
+  }
+
   const topicAccumulator = new Map<string, { name: string; type: string; publishers: Set<string>; subscribers: Set<string> }>();
-  const nodeEntities = nodeEntries
+  const nodeEntities = nodeNames
     .slice()
-    .sort((left, right) => left.name.localeCompare(right.name))
-    .map((entry) => {
-      const publishing = dedupeSortedStrings(entry.details.publishing);
-      const subscribing = dedupeSortedStrings(entry.details.subscribing);
-      const servicesList = dedupeSortedStrings(entry.details.services);
+    .sort((left, right) => left.localeCompare(right))
+    .map((nodeName) => {
+      const details = detailsByName.get(nodeName);
+      const publishing = dedupeSortedStrings(details?.publishing ?? []);
+      const subscribing = dedupeSortedStrings(details?.subscribing ?? []);
+      const servicesList = dedupeSortedStrings(details?.services ?? []);
 
       for (const topicName of publishing) {
         let topicRecord = topicAccumulator.get(topicName);
@@ -4158,7 +4264,7 @@ function buildRosGraphSnapshot(nodeEntries: Array<{ name: string; details: NodeD
           };
           topicAccumulator.set(topicName, topicRecord);
         }
-        topicRecord.publishers.add(entry.name);
+        topicRecord.publishers.add(nodeName);
       }
 
       for (const topicName of subscribing) {
@@ -4172,19 +4278,19 @@ function buildRosGraphSnapshot(nodeEntries: Array<{ name: string; details: NodeD
           };
           topicAccumulator.set(topicName, topicRecord);
         }
-        topicRecord.subscribers.add(entry.name);
+        topicRecord.subscribers.add(nodeName);
       }
 
       return {
-        id: rosGraphEntityId("node", entry.name),
+        id: rosGraphEntityId("node", nodeName),
         kind: "node" as const,
-        name: entry.name,
+        name: nodeName,
         publishing,
         subscribing,
         services: servicesList,
         x: 0,
         y: 0,
-        width: rosGraphEntityWidth("node", entry.name),
+        width: rosGraphEntityWidth("node", nodeName),
         height: ROS_GRAPH_NODE_HEIGHT
       };
     });
@@ -4401,6 +4507,33 @@ function setRosGraphOpen(open: boolean): void {
   });
 }
 
+async function loadRosGraphNodeEntries(nodeNames: string[]): Promise<{
+  successfulNodes: Array<{ name: string; details: NodeDetails }>;
+  partialFailures: string[];
+}> {
+  const successfulNodes: Array<{ name: string; details: NodeDetails }> = [];
+  const partialFailures: string[] = [];
+  let cursor = 0;
+
+  const worker = async (): Promise<void> => {
+    while (cursor < nodeNames.length) {
+      const index = cursor;
+      cursor += 1;
+      const nodeName = nodeNames[index];
+      try {
+        const details = await rosClient.getNodeDetails(nodeName);
+        successfulNodes.push({ name: nodeName, details });
+      } catch {
+        partialFailures.push(nodeName);
+      }
+    }
+  };
+
+  const concurrency = Math.max(1, Math.min(ROS_GRAPH_NODE_DETAIL_CONCURRENCY, nodeNames.length));
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  return { successfulNodes, partialFailures };
+}
+
 async function refreshRosGraphSnapshot(): Promise<void> {
   if (!rosClient.isConnected()) {
     clearRosGraphState();
@@ -4414,21 +4547,9 @@ async function refreshRosGraphSnapshot(): Promise<void> {
 
   try {
     const nodeNames = dedupeSortedStrings(await rosClient.listNodes());
-    const results = await Promise.allSettled(nodeNames.map((nodeName) => rosClient.getNodeDetails(nodeName)));
-    const successfulNodes: Array<{ name: string; details: NodeDetails }> = [];
-    const partialFailures: string[] = [];
+    const { successfulNodes, partialFailures } = await loadRosGraphNodeEntries(nodeNames);
 
-    for (let index = 0; index < results.length; index += 1) {
-      const result = results[index];
-      const nodeName = nodeNames[index];
-      if (result.status === "fulfilled") {
-        successfulNodes.push({ name: nodeName, details: result.value });
-      } else {
-        partialFailures.push(nodeName);
-      }
-    }
-
-    rosGraphSnapshot = buildRosGraphSnapshot(successfulNodes, partialFailures);
+    rosGraphSnapshot = buildRosGraphSnapshot(nodeNames, successfulNodes, partialFailures);
     const activeView = getActiveRosGraphView();
     if (rosGraphSelectedId && activeView && !activeView.entityById.has(rosGraphSelectedId)) {
       rosGraphSelectedId = null;
