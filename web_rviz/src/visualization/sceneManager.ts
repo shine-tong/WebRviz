@@ -1,4 +1,4 @@
-﻿import {
+import {
   AmbientLight,
   AxesHelper,
   BufferAttribute,
@@ -195,8 +195,8 @@ export class SceneManager {
     this.pointCloudMaterial = new PointsMaterial({
       size: 0.02,
       vertexColors: true,
-      transparent: true,
-      opacity: 0.96,
+      transparent: false,
+      opacity: 1,
       sizeAttenuation: true
     });
 
@@ -945,15 +945,16 @@ export class SceneManager {
     geometry.setAttribute("position", new BufferAttribute(pointCloud.positions, 3));
     geometry.setAttribute("color", new BufferAttribute(pointCloud.colors, 3));
 
-    if (this.pointCloud) {
-      this.tfLayer.remove(this.pointCloud);
-      this.pointCloud.geometry.dispose();
+    if (!this.pointCloud) {
+      this.pointCloud = new Points(geometry, this.pointCloudMaterial);
+      this.tfLayer.add(this.pointCloud);
+    } else {
+      const previousGeometry = this.pointCloud.geometry;
+      this.pointCloud.geometry = geometry;
+      previousGeometry.dispose();
     }
 
-    this.pointCloud = new Points(geometry, this.pointCloudMaterial);
     this.pointCloudFrameId = pointCloud.frameId || this.fixedFrame;
-    this.tfLayer.add(this.pointCloud);
-
     this.refreshFrameTransforms();
   }
 
@@ -1640,4 +1641,3 @@ export class SceneManager {
     window.requestAnimationFrame(this.loop);
   }
 }
-
