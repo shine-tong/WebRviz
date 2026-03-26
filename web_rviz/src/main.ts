@@ -1,6 +1,6 @@
 import "./style.css";
 import { Vector3 } from "three";
-import { RuntimeConfig, loadConfig, saveConfig } from "./config";
+import { RuntimeConfig, defaultConfig, loadConfig, saveConfig } from "./config";
 import { decodePointCloud2 } from "./ros/pointcloud";
 import { ConnectionState, MessageDetailsResponse, MessageTypeDef, NodeDetails, RosClient, ServiceInfo, TopicInfo } from "./ros/rosClient";
 import { loadRvizSyncHints } from "./rviz/rvizConfig";
@@ -320,6 +320,7 @@ const ROS_GRAPH_COMPONENT_GAP = 110;
 const ROS_GRAPH_FIT_PADDING = 56;
 const ROS_GRAPH_NODE_HEIGHT = 42;
 const ROS_GRAPH_TOPIC_HEIGHT = 36;
+const DEFAULT_ASSET_SERVER_PORT = "8081";
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 function getElements(): AppElements {
@@ -3599,6 +3600,38 @@ function syncConfigFromUi(): void {
   saveConfig(config);
 }
 
+function deriveAssetPackageRootUrl(rosbridgeUrl: string): string | null {
+  try {
+    const url = new URL(rosbridgeUrl);
+    if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+      return null;
+    }
+
+    url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+    url.port = DEFAULT_ASSET_SERVER_PORT;
+    url.pathname = "/ros_pkgs";
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+}
+
+function resolveRuntimePackageRootUrl(): { url: string; autoDerived: boolean } {
+  const configured = (config.packageRootUrl || "").trim();
+  if (configured && configured !== defaultConfig.packageRootUrl) {
+    return { url: configured, autoDerived: false };
+  }
+
+  const derived = deriveAssetPackageRootUrl(config.rosbridgeUrl);
+  if (derived) {
+    return { url: derived, autoDerived: true };
+  }
+
+  return { url: configured || defaultConfig.packageRootUrl, autoDerived: false };
+}
+
 function unsubscribe(topic?: any): void {
   if (!topic) {
     return;
@@ -3727,8 +3760,8 @@ async function subscribePointCloud(topicName: string): Promise<void> {
   log(`subscribed pointcloud topic: ${topicName}`);
 }
 
-async function loadRobotIntoScene(): Promise<void> {
-  const loaded = await loadRobotModel(rosClient, config.urdfFallbackPath, config.packageRootUrl);
+async function loadRobotIntoScene(packageRootUrl: string): Promise<void> {
+  const loaded = await loadRobotModel(rosClient, config.urdfFallbackPath, packageRootUrl);
   sceneManager.setRobot(loaded.robot, loaded.rootLink);
   refreshLatestPlannedTrajectoryPreview();
   log(`robot model loaded (root=${loaded.rootLink})`);
@@ -3743,8 +3776,13 @@ async function connect(): Promise<void> {
   await rosClient.connect(config.rosbridgeUrl);
   log("rosbridge connected");
 
+  const runtimePackageRoot = resolveRuntimePackageRootUrl();
+  if (runtimePackageRoot.autoDerived) {
+    log(`package root auto resolved: ${runtimePackageRoot.url}`);
+  }
+
   try {
-    await loadRobotIntoScene();
+    await loadRobotIntoScene(runtimePackageRoot.url);
   } catch (error) {
     log(`robot load warning: ${formatError(error)}`);
   }

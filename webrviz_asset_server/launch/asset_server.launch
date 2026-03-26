@@ -1,0 +1,10 @@
+<launch>
+  <arg name="host" default="0.0.0.0" />
+  <arg name="port" default="8081" />
+
+  <node pkg="webrviz_asset_server"
+        type="serve_ros_packages.py"
+        name="webrviz_asset_server"
+        output="screen"
+        args="--host $(arg host) --port $(arg port)" />
+</launch>
