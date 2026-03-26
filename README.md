@@ -48,6 +48,7 @@ ROS2 jazzy 版本请查看 [jazzy 分支](https://github.com/shine-tong/WebRviz/
 
 - `rosbridge_server`
 - `rosapi`
+- `rospkg`
 
 可用以下命令检查：
 
@@ -84,6 +85,8 @@ source ~/your_ws/devel/setup.bash
 roslaunch your_moveit_config demo.launch
 ```
 
+若希望 `package://` 资源自动通过 HTTP 暴露给 WebRviz，请确保 `webrviz_asset_server` 包与 `demo.launch` 所在机器人包位于同一个 ROS 工作空间中，并已经完成编译。
+
 另开终端启动 rosbridge：
 
 ```bash
@@ -91,7 +94,7 @@ source ~/your_ws/devel/setup.bash
 roslaunch rosbridge_server rosbridge_websocket.launch
 ```
 
-也可以直接在 `demo.launch` 中加入 `rosbridge` 与 `rosapi`：
+也可以直接在 `demo.launch` 中加入 `rosbridge`、`rosapi` 和 WebRviz 资源服务：
 
 ```xml
 <!-- Start rosbridge websocket server -->
@@ -107,9 +110,15 @@ roslaunch rosbridge_server rosbridge_websocket.launch
       type="rosapi_node"
       name="rosapi"
       output="screen"/>
+
+<!-- WebRviz package:// asset server -->
+<include file="$(find webrviz_asset_server)/launch/asset_server.launch">
+  <arg name="host" value="0.0.0.0"/>
+  <arg name="port" value="8081"/>
+</include>
 ```
 
-> 注：建议将上述两个节点放在 RViz 节点之后启动。
+> 注：建议将上述节点放在 RViz 节点之后启动。若使用默认配置，请同时放通 `9090` 和 `8081` 端口。
 
 #### 1.3 构建前端资源
 
@@ -118,15 +127,22 @@ cd ~/WebRviz/web_rviz
 npm run build
 ```
 
-#### 1.4 启动静态服务（支持 package://）
+#### 1.4 启动静态服务
 
 ```bash
 python3 tools/serve_webrviz.py \
   --dist dist \
-  --mount urdf_package_name=~/your_ws/src/urdf_package_name \
   --host 0.0.0.0 \
   --port 8080
 ```
+
+默认情况下，前端会在连接 rosbridge 后自动将 `package://` 资源解析到：
+
+```text
+http://<rosbridge-host>:8081/ros_pkgs/<package_name>/...
+```
+
+如果你的 `demo.launch` 没有启动 `webrviz_asset_server`，仍然可以继续使用 `--mount urdf_package_name=...` 作为兜底方案。
 
 #### 1.5 打开网页
 
@@ -157,7 +173,7 @@ WEBRVIZ_PORT=8080 \
 WEBRVIZ_MOUNTS="--mount urdf_package_name=~/your_ws/src/urdf_package_name"
 ```
 
-> 注：`WEBRVIZ_MOUNTS` 参数会直接传给 `tools/serve_webrviz.py`，用于挂载 `package://` 资源。
+> 注：`WEBRVIZ_MOUNTS` 仅在未启用 `webrviz_asset_server` 时作为兜底挂载方案，参数会直接传给 `tools/serve_webrviz.py`。
 
 #### 2.3 打开网页
 
@@ -173,10 +189,11 @@ http://127.0.0.1:8080
 
 #### 3.2 启动前配置
 
-- 确保已经启动 `demo.launch` 和 `rosbridge`
+- 确保已经启动 `demo.launch`、`rosbridge` 和 `webrviz_asset_server`
 - 若已开启 `ufw` 需要放开防火墙端口
   ```bash
   sudo ufw allow 9090/tcp
+  sudo ufw allow 8081/tcp
   ```
 - 查看 Ubuntu IP 地址
   ```bash
@@ -187,7 +204,6 @@ http://127.0.0.1:8080
 ```bash
 python tools/serve_webrviz.py \
   --dist dist \
-  --mount urdf_package_name="your_path\urdf_package_name" \
   --host 0.0.0.0 \
   --port 8080
 ```
@@ -202,6 +218,10 @@ ws://yourUbuntu-ip:9090
 - Ubuntu是否在监听 9090 端口
   ```bash
   ss -lntp | grep 9090
+  ```
+- Ubuntu 是否在监听 8081 端口
+  ```bash
+  ss -lntp | grep 8081
   ```
 - 地址前缀是否为 `ws://`（不是 `http://`）
 
@@ -313,21 +333,23 @@ URDF 中常见 mesh 引用：
 
 ### 本项目做法
 
-通过命令参数：
+默认推荐方案是：在 ROS 侧启动 `webrviz_asset_server`，由它动态解析任意 `package://<package_name>/...` 请求，并通过 HTTP 暴露为：
 
-```bash
---mount urdf_package_name=~/your_ws/src/urdf_package_name
-```
+- URL：`http://<rosbridge-host>:8081/ros_pkgs/<package_name>/...`
+- 本地：由 ROS 环境中的包索引动态解析
 
-将本地目录映射为：
-
-- URL：`/ros_pkgs/urdf_package_name/...`
-- 本地：`~/your_ws/src/urdf_package_name/...`
-
-页面中设置：
+页面中保持默认设置即可：
 
 ```text
 URDF package root URL = /ros_pkgs
+```
+
+当使用默认值 `/ros_pkgs` 时，WebRviz 会在连接 rosbridge 后自动推导远端资源根地址。
+
+若未启用 ROS 侧资源服务，仍可通过下面的方式手工挂载本地目录：
+
+```bash
+--mount urdf_package_name=~/your_ws/src/urdf_package_name
 ```
 
 ---
