@@ -1,4 +1,4 @@
-﻿import "./style.css";
+import "./style.css";
 import { Vector3 } from "three";
 import { RuntimeConfig, loadConfig, saveConfig } from "./config";
 import { decodePointCloud2 } from "./ros/pointcloud";
@@ -435,7 +435,6 @@ sceneManager.setFixedFrame(config.fixedFrame);
 let topics: TopicInfo[] = [];
 let logEntries: LogEntry[] = [];
 let subscriptions: TopicSubscriptions = {};
-let lastPointCloudTimestamp = 0;
 let plannedTrajectoryVisible = true;
 let latestPlannedTrajectory: PlannedTrajectoryPayload | null = null;
 let pendingPlannedTrajectory: PlannedTrajectoryPayload | null = null;
@@ -3721,12 +3720,6 @@ async function subscribePointCloud(topicName: string): Promise<void> {
   subscriptions.pointCloud = rosClient.createTopic(topicName, POINTCLOUD2_TYPE, throttleRate);
 
   subscriptions.pointCloud.subscribe((message: unknown) => {
-    const now = Date.now();
-    if (now - lastPointCloudTimestamp < throttleRate) {
-      return;
-    }
-    lastPointCloudTimestamp = now;
-
     const parsed = decodePointCloud2(message, config.maxPoints);
     sceneManager.setPointCloud(parsed);
   });
@@ -5482,74 +5475,3 @@ window.addEventListener("beforeunload", () => {
 });
 
 log(t(currentLanguage, "log.ready"));
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

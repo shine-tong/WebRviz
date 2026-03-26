@@ -32,6 +32,7 @@ const DATATYPE_INT32 = 5;
 const DATATYPE_UINT32 = 6;
 const DATATYPE_FLOAT32 = 7;
 const DATATYPE_FLOAT64 = 8;
+const DEPTH_RANGE_EPSILON = 1e-4;
 
 function decodeBase64(input: string): Uint8Array {
   const binary = atob(input);
@@ -102,6 +103,49 @@ function unpackRgb(colorBits: number): [number, number, number] {
   return [r / 255, g / 255, b / 255];
 }
 
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function hsvToRgb(hueDegrees: number, saturation: number, value: number): [number, number, number] {
+  const hue = ((hueDegrees % 360) + 360) % 360;
+  const chroma = value * saturation;
+  const hueSection = hue / 60;
+  const x = chroma * (1 - Math.abs((hueSection % 2) - 1));
+
+  let r = 0;
+  let g = 0;
+  let b = 0;
+
+  if (hueSection < 1) {
+    r = chroma;
+    g = x;
+  } else if (hueSection < 2) {
+    r = x;
+    g = chroma;
+  } else if (hueSection < 3) {
+    g = chroma;
+    b = x;
+  } else if (hueSection < 4) {
+    g = x;
+    b = chroma;
+  } else if (hueSection < 5) {
+    r = x;
+    b = chroma;
+  } else {
+    r = chroma;
+    b = x;
+  }
+
+  const match = value - chroma;
+  return [r + match, g + match, b + match];
+}
+
+function depthToColor(normalizedDepth: number): [number, number, number] {
+  const hue = 240 - clamp01(normalizedDepth) * 240;
+  return hsvToRgb(hue, 0.9, 0.96);
+}
+
 export function decodePointCloud2(rawMessage: unknown, maxPoints: number): ParsedPointCloud | null {
   const message = rawMessage as PointCloud2Message;
   if (!message || !Array.isArray(message.fields) || message.point_step <= 0) {
@@ -113,7 +157,6 @@ export function decodePointCloud2(rawMessage: unknown, maxPoints: number): Parse
   const yField = fields.find((field) => field.name === "y");
   const zField = fields.find((field) => field.name === "z");
   const rgbField = fields.find((field) => field.name === "rgb" || field.name === "rgba");
-  const intensityField = fields.find((field) => field.name === "intensity");
 
   if (!xField || !yField || !zField) {
     return null;
@@ -135,6 +178,16 @@ export function decodePointCloud2(rawMessage: unknown, maxPoints: number): Parse
 
   const positions = new Float32Array(estimatedCount * 3);
   const colors = new Float32Array(estimatedCount * 3);
+  const depthValues = new Float32Array(estimatedCount);
+  const distanceValues = new Float32Array(estimatedCount);
+  const packedRgbValues = rgbField ? new Uint32Array(estimatedCount) : null;
+
+  let minDepth = Number.POSITIVE_INFINITY;
+  let maxDepth = Number.NEGATIVE_INFINITY;
+  let minDistance = Number.POSITIVE_INFINITY;
+  let maxDistance = Number.NEGATIVE_INFINITY;
+  let firstRgbBits = -1;
+  let hasRgbVariation = false;
 
   let writeIndex = 0;
   for (let pointIndex = 0; pointIndex < totalPoints; pointIndex += sampleStep) {
@@ -152,28 +205,57 @@ export function decodePointCloud2(rawMessage: unknown, maxPoints: number): Parse
     positions[writeIndex * 3 + 1] = y;
     positions[writeIndex * 3 + 2] = z;
 
-    let r = 0.82;
-    let g = 0.88;
-    let b = 0.95;
+    depthValues[writeIndex] = z;
+    minDepth = Math.min(minDepth, z);
+    maxDepth = Math.max(maxDepth, z);
 
     if (rgbField) {
-      [r, g, b] = unpackRgb(readRgbBits(view, baseOffset, rgbField, littleEndian));
-    } else if (intensityField) {
-      const intensity = readNumericField(view, baseOffset, intensityField, littleEndian);
-      const normalized = Number.isFinite(intensity) ? Math.max(0, Math.min(1, intensity)) : 0.65;
-      r = normalized;
-      g = normalized;
-      b = normalized;
+      const rgbBits = readRgbBits(view, baseOffset, rgbField, littleEndian) & 0xffffff;
+      packedRgbValues![writeIndex] = rgbBits;
+      if (firstRgbBits < 0) {
+        firstRgbBits = rgbBits;
+      } else if (rgbBits !== firstRgbBits) {
+        hasRgbVariation = true;
+      }
     }
 
-    colors[writeIndex * 3] = r;
-    colors[writeIndex * 3 + 1] = g;
-    colors[writeIndex * 3 + 2] = b;
+    const distance = Math.hypot(x, y, z);
+    distanceValues[writeIndex] = distance;
+    minDistance = Math.min(minDistance, distance);
+    maxDistance = Math.max(maxDistance, distance);
     writeIndex += 1;
   }
 
   if (writeIndex === 0) {
     return null;
+  }
+
+  const zRange = maxDepth - minDepth;
+  const distanceRange = maxDistance - minDistance;
+  const useDistanceDepth = zRange < DEPTH_RANGE_EPSILON && distanceRange >= DEPTH_RANGE_EPSILON;
+  const selectedDepthValues = useDistanceDepth ? distanceValues : depthValues;
+  const selectedDepthMin = useDistanceDepth ? minDistance : minDepth;
+  const selectedDepthRange = useDistanceDepth ? distanceRange : zRange;
+  const useRgb = Boolean(packedRgbValues && hasRgbVariation);
+
+  for (let index = 0; index < writeIndex; index += 1) {
+    let r = 0.82;
+    let g = 0.88;
+    let b = 0.95;
+
+    if (useRgb) {
+      [r, g, b] = unpackRgb(packedRgbValues![index]);
+    } else {
+      const normalizedDepth =
+        selectedDepthRange >= DEPTH_RANGE_EPSILON
+          ? (selectedDepthValues[index] - selectedDepthMin) / selectedDepthRange
+          : 0.5;
+      [r, g, b] = depthToColor(normalizedDepth);
+    }
+
+    colors[index * 3] = r;
+    colors[index * 3 + 1] = g;
+    colors[index * 3 + 2] = b;
   }
 
   return {
