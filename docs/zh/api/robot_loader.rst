@@ -27,10 +27,14 @@
 
 - 校验 XML 合法性。
 - 推断根连杆。
-- 配置 ``package://`` 到 HTTP URL 的映射。
+- 将 ``package://<package>`` 映射为 ``<packageRootUrl>/<package>``。
 - 返回 ``LoadedRobotModel``。
 
 ``loadRobotModel(rosClient, fallbackPath, packageRootUrl)``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 一站式完成 URDF 获取与机器人构建。
+
+- 调用方应传入当前连接实际生效的运行时资源根，而不只是持久化配置值。
+- 默认连接流程下，该运行时资源根可根据 rosbridge 主机地址自动推导，从而让 mesh
+  资源直接从 ROS 侧资源服务加载。

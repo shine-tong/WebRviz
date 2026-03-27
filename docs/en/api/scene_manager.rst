@@ -85,6 +85,7 @@ SceneManager key methods
 - ``setVisibleTfFrames(frames)``: limits visible TF axes to the provided frame ids, or resets filtering with ``null``.
 - ``getDefaultEndEffectorFrame()``: infers a default end-effector frame from the loaded robot model.
 - ``getLinkList()`` / ``getFrameList()``: lists robot links and known frames.
+- ``getRobotJointConnections()``: returns sorted parent/child joint edges extracted from the loaded URDF robot.
 - ``getTfSnapshot()`` / ``getTfNodes()``: reads TF graph snapshots.
 - ``clearTfRecords()``: clears TF cache and visuals.
 - ``getRelativeTransform(frame)``: resolves a pose relative to the fixed frame, preferring live TF when available.

@@ -26,6 +26,7 @@ Behavior:
 
 - Supports both base64 and ``number[]`` binary payloads.
 - Requires ``x/y/z`` fields; returns ``null`` when missing.
-- Uses ``rgb/rgba`` if present, otherwise falls back to ``intensity`` grayscale.
+- Uses ``rgb/rgba`` if present and meaningfully varied.
+- Otherwise falls back to RViz-style depth coloring based on the decoded ``z`` range, with distance-based coloring as the last fallback when the depth range collapses.
 - Samples points according to ``maxPoints`` for stable rendering performance.
 - Skips invalid numeric values.
