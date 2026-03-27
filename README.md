@@ -1,6 +1,7 @@
 ﻿# WebRviz 本地可视化工具
-[![CI](https://img.shields.io/badge/CI-GitHub_Actions-blue)](.github/workflows/ci.yml)
+[![CI](https://img.shields.io/badge/CI-passing-green)](.github/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![EN](https://img.shields.io/badge/README-EN-0A66C2)](README.en.md)
 
 
 ## 项目简介
