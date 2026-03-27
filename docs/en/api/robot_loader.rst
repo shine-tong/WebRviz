@@ -27,10 +27,14 @@ Reads URDF from ``/robot_description`` first, then falls back to URL.
 
 - Validates XML.
 - Infers root link.
-- Maps ``package://`` to HTTP package root URL.
+- Maps ``package://<package>`` to ``<packageRootUrl>/<package>``.
 - Returns a ``LoadedRobotModel``.
 
 ``loadRobotModel(rosClient, fallbackPath, packageRootUrl)``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 One-shot helper that fetches URDF and builds the robot object.
+
+- Callers are expected to pass the effective runtime asset root, not just the persisted config value.
+- In the default connect flow, this runtime root can be auto-derived from the rosbridge host so meshes
+  are fetched from the ROS-side asset server.

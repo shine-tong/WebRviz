@@ -16,8 +16,8 @@ ROS2 jazzy 版本请查看 [jazzy 分支](https://github.com/shine-tong/WebRviz/
 - 在网页中显示机器人 URDF 模型，并同步渲染 `/tf`、`/tf_static`、`/joint_states`、`sensor_msgs/PointCloud2`。
 - 支持一键同步 RViz 配置，包括固定坐标系与点云候选话题。
 - 左侧面板支持中英文切换、亮色/暗色主题切换，以及自适应布局。
-- 右侧 `Robot State` 面板包含关节角度、笛卡尔位置、TF 树；TF 树会显示 `link -> joint -> link` 层级，并支持点击查看 link / joint 详情。
-- 右侧 `ROS Info` 面板支持浏览 topic、service、param 列表，并查看消息、服务和参数详情。
+- 右侧 `机器人状态` 面板包含关节角度、笛卡尔位置、TF 树；TF 树会显示 `link -> joint -> link` 层级，并支持点击查看 link / joint 详情。
+- 右侧 `ROS 信息` 面板支持浏览 topic、service、param 列表，并查看消息、服务和参数详情。
 - 中间 3D 视图支持按需显示全部 / 隐藏全部 / 选择指定 Link 的 TF 坐标轴，并提供重置视角按钮。
 - 支持 MoveIt 规划轨迹预览，可显示轨迹线以及 TCP 起点 / 终点姿态标记。
 - 支持 `ROS 图谱` 弹窗，基于 `rosapi` 的 nodes / node_details 快照显示 `Nodes/Topics (all)` 详细关系图，并可切换为节点通信关系图。
@@ -142,7 +142,7 @@ python3 tools/serve_webrviz.py \
 http://<rosbridge-host>:8081/ros_pkgs/<package_name>/...
 ```
 
-如果你的 `demo.launch` 没有启动 `webrviz_asset_server`，仍然可以继续使用 `--mount urdf_package_name=...` 作为兜底方案。
+如果你的 `demo.launch` 没有启动 `webrviz_asset_server`，仍然可以继续使用 `--mount urdf_package_name=...` 作为备用方案。
 
 #### 1.5 打开网页
 
@@ -173,7 +173,7 @@ WEBRVIZ_PORT=8080 \
 WEBRVIZ_MOUNTS="--mount urdf_package_name=~/your_ws/src/urdf_package_name"
 ```
 
-> 注：`WEBRVIZ_MOUNTS` 仅在未启用 `webrviz_asset_server` 时作为兜底挂载方案，参数会直接传给 `tools/serve_webrviz.py`。
+> 注：`WEBRVIZ_MOUNTS` 仅在未启用 `webrviz_asset_server` 时作为备用挂载方案，参数会直接传给 `tools/serve_webrviz.py`。
 
 #### 2.3 打开网页
 
@@ -260,7 +260,7 @@ webrviz-theme
 
 > 默认隐藏，可通过中间箭头展开或收起
 
-### 1. Robot State
+### 1. 机器人状态
 
 - 关节角度：显示当前 `/joint_states`，支持 `deg / rad` 单位切换。
 - 笛卡尔位置：支持选择 `TCP link`，并提供与“数据分析”一致的长度、角度单位切换控件。
@@ -268,12 +268,12 @@ webrviz-theme
 - `显示全部 / 隐藏全部`：控制 3D 视图中 TF 坐标轴的整体显示状态。
 - `选择 Link`：按需选择一个或多个 Link，只在中间 3D 视图中显示选中的 TF 坐标轴。
 
-### 2. ROS Info
+### 2. ROS 信息
 
-- `ROS Info` 面板包含 `Topics`、`Services`、`Params` 三个列表，且 `topic/service` 均显示对应 `type`。
-- 点击 `topic` 的 `type` 可查看 message 详细结构。
-- 点击 `service` 的 `type` 可查看 service 详细结构（含 Request/Response）。
-- 点击 `param` 可查看当前值；支持一键加载并查看全部参数值。
+- `ROS 信息` 面板包含 `话题`、`服务`、`参数` 三个列表，且 `话题/服务` 均显示对应 `消息/服务类型`。
+- 点击对应 `话题` 可以查看其 message 详细结构。
+- 点击对应 `服务` 可以查看其 service 详细结构（含 Request/Response）。
+- 点击对应 `参数` 可查看当前值；支持一键加载并查看全部参数值。
 
 ## 中间 3D 视图
 
@@ -296,7 +296,7 @@ webrviz-theme
 
 ### 1. ROS 图谱
 
-- 通过左上角 <img src="web_rviz/assets/iconFont/graph.png" alt="WebRviz" style="height: 1em; vertical-align: middle;"> 按钮打开独立弹窗，支持 `Refresh`、`Fit View`、搜索与点击选中详情。
+- 通过左上角 <img src="web_rviz/assets/iconFont/graph.png" alt="WebRviz" style="height: 1em; vertical-align: middle;"> 按钮打开独立弹窗，支持 `刷新`、`聚焦`、`搜索与点击`选中详情。
 - `详细图谱` 模式会显示 `node -> topic -> node` 的完整 `Nodes/Topics (all)` 关系，并在右侧展示发布、订阅、service 等详情。
 - `节点通信图` 模式会聚合同一对节点之间的通信边，并在边上显示对应 topic 标签，便于快速查看主要通信关系。
 - 图谱数据来自 `rosapi` 的 `/rosapi/nodes` 与 `/rosapi/node_details`，并复用 topic/type 缓存补全消息类型信息。
